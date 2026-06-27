@@ -961,8 +961,27 @@ func normalizeGroupRuntimeConfig(config *models.GroupConfig) {
 			proxies = append(proxies, proxyURL)
 		}
 		config.ProxyPool.Proxies = proxies
+
+		items := make([]models.ProxyPoolItem, 0, len(config.ProxyPool.Items))
+		seenItems := make(map[string]struct{}, len(config.ProxyPool.Items))
+		for _, item := range config.ProxyPool.Items {
+			item.URL = strings.TrimSpace(item.URL)
+			if item.URL == "" {
+				continue
+			}
+			if _, exists := seenItems[item.URL]; exists {
+				continue
+			}
+			seenItems[item.URL] = struct{}{}
+			items = append(items, item)
+		}
+		config.ProxyPool.Items = items
+
 		if config.ProxyPool.CooldownSeconds == 0 {
 			config.ProxyPool.CooldownSeconds = 60
+		}
+		if config.ProxyPool.AutoEnableIntervalSeconds == 0 {
+			config.ProxyPool.AutoEnableIntervalSeconds = config.ProxyPool.CooldownSeconds
 		}
 	}
 }
@@ -997,10 +1016,19 @@ func validateGroupRuntimeConfig(config models.GroupConfig) error {
 		if config.ProxyPool.CooldownSeconds < 0 {
 			return fmt.Errorf("proxy_pool.cooldown_seconds must not be negative")
 		}
+		if config.ProxyPool.AutoEnableIntervalSeconds < 0 {
+			return fmt.Errorf("proxy_pool.auto_enable_interval_seconds must not be negative")
+		}
 		for _, proxyURL := range config.ProxyPool.Proxies {
 			parsed, err := url.Parse(proxyURL)
 			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 				return fmt.Errorf("invalid proxy URL: %s", proxyURL)
+			}
+		}
+		for _, item := range config.ProxyPool.Items {
+			parsed, err := url.Parse(item.URL)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return fmt.Errorf("invalid proxy URL: %s", item.URL)
 			}
 		}
 	}

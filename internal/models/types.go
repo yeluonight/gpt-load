@@ -68,8 +68,20 @@ type KeyRequestLimitConfig = RequestLimitConfig
 
 // ProxyPoolConfig defines a group-level outbound proxy pool.
 type ProxyPoolConfig struct {
-	Proxies         []string `json:"proxies,omitempty"`
-	CooldownSeconds int      `json:"cooldown_seconds,omitempty"`
+	Proxies                   []string        `json:"proxies,omitempty"`
+	Items                     []ProxyPoolItem `json:"items,omitempty"`
+	CooldownSeconds           int             `json:"cooldown_seconds,omitempty"`
+	AutoEnableIntervalSeconds int             `json:"auto_enable_interval_seconds,omitempty"`
+}
+
+type ProxyPoolItem struct {
+	URL               string `json:"url"`
+	Disabled          bool   `json:"disabled,omitempty"`
+	PermanentDisabled bool   `json:"permanent_disabled,omitempty"`
+	Notes             string `json:"notes,omitempty"`
+	LastTestOK        *bool  `json:"last_test_ok,omitempty"`
+	LastTestError     string `json:"last_test_error,omitempty"`
+	LastTestAt        string `json:"last_test_at,omitempty"`
 }
 
 // UnmarshalJSON allows proxy_pool to be configured as an object, string array,
@@ -77,7 +89,7 @@ type ProxyPoolConfig struct {
 func (c *ProxyPoolConfig) UnmarshalJSON(data []byte) error {
 	type alias ProxyPoolConfig
 	var obj alias
-	if err := json.Unmarshal(data, &obj); err == nil && (len(obj.Proxies) > 0 || obj.CooldownSeconds > 0) {
+	if err := json.Unmarshal(data, &obj); err == nil && (len(obj.Proxies) > 0 || len(obj.Items) > 0 || obj.CooldownSeconds > 0 || obj.AutoEnableIntervalSeconds > 0) {
 		*c = ProxyPoolConfig(obj)
 		return nil
 	}
@@ -95,6 +107,49 @@ func (c *ProxyPoolConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	return json.Unmarshal(data, (*alias)(c))
+}
+
+func (c ProxyPoolConfig) Entries() []ProxyPoolItem {
+	entries := make([]ProxyPoolItem, 0, len(c.Items)+len(c.Proxies))
+	seen := make(map[string]struct{}, len(c.Items)+len(c.Proxies))
+
+	for _, item := range c.Items {
+		item.URL = strings.TrimSpace(item.URL)
+		if item.URL == "" {
+			continue
+		}
+		if _, exists := seen[item.URL]; exists {
+			continue
+		}
+		seen[item.URL] = struct{}{}
+		entries = append(entries, item)
+	}
+
+	for _, proxyURL := range c.Proxies {
+		proxyURL = strings.TrimSpace(proxyURL)
+		if proxyURL == "" {
+			continue
+		}
+		if _, exists := seen[proxyURL]; exists {
+			continue
+		}
+		seen[proxyURL] = struct{}{}
+		entries = append(entries, ProxyPoolItem{URL: proxyURL})
+	}
+
+	return entries
+}
+
+func (c ProxyPoolConfig) SelectableEntries() []ProxyPoolItem {
+	entries := c.Entries()
+	selectable := make([]ProxyPoolItem, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Disabled || entry.PermanentDisabled {
+			continue
+		}
+		selectable = append(selectable, entry)
+	}
+	return selectable
 }
 
 func splitProxyText(text string) []string {

@@ -300,9 +300,23 @@ All fields below are optional group configuration fields. Existing configuration
     "reset_time": "00:00"
   },
   "proxy_pool": {
+    "auto_enable_interval_seconds": 300,
     "proxies": [
       "http://user:pass@proxy-a.example:8080",
       "http://user:pass@proxy-b.example:8080"
+    ],
+    "items": [
+      {
+        "url": "http://user:pass@proxy-a.example:8080",
+        "disabled": false,
+        "permanent_disabled": false,
+        "notes": "exit A"
+      },
+      {
+        "url": "http://user:pass@proxy-b.example:8080",
+        "permanent_disabled": true,
+        "notes": "long-term disabled"
+      }
     ],
     "cooldown_seconds": 60
   }
@@ -312,7 +326,7 @@ All fields below are optional group configuration fields. Existing configuration
 - `model_rate_limits`: `model` supports exact model names, and `*` acts as the default limit. `rpm` is requests per minute, `tpm` is tokens per minute. Enter TPM as a plain number, for example `250000`, not `250k`. `request_limit` limits how many times each key may call that model in one reset window.
 - `key_request_limit`: Limits each key's total request count, counted independently from `model_rate_limits[].request_limit`.
 - Reset policy: `reset_mode` supports `interval` and `daily`; `interval` uses `interval_minutes`, while `daily` uses `reset_time`. Time accepts `HH:MM` or `HH:MM:SS`. Daily reset times are evaluated in Pacific Time (PT, `America/Los_Angeles`).
-- `proxy_pool`: accepts an object, string array, or newline/comma-separated string. When configured, it takes priority over the normal `proxy_url` setting. Unavailable proxies enter a temporary cooldown and requests switch to another available proxy. Transport errors and upstream unsupported-location errors are treated as proxy failures, not key failures.
+- `proxy_pool`: accepts an object, string array, or newline/comma-separated string. Legacy `proxies` remains compatible; the WebUI now uses `items` to manage per-proxy test results, notes, manual disable state, and long-term disable state. When configured, it takes priority over the normal `proxy_url` setting. Only clear proxy connection errors or upstream unsupported-location errors temporarily skip a proxy; ordinary upstream/key timeouts do not mark a proxy unavailable. `auto_enable_interval_seconds` controls when automatically skipped proxies rejoin selection, while long-term disabled proxies never auto-enable.
 
 ## Data Encryption Migration
 

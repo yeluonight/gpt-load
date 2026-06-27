@@ -36,13 +36,21 @@ func (m *Manager) Select(group *models.Group, keyID uint) (Selection, error) {
 	if err != nil {
 		return Selection{}, fmt.Errorf("failed to decode group config: %w", err)
 	}
-	if groupConfig.ProxyPool == nil || len(groupConfig.ProxyPool.Proxies) == 0 {
+	if groupConfig.ProxyPool == nil || len(groupConfig.ProxyPool.Entries()) == 0 {
 		return Selection{URL: group.EffectiveConfig.ProxyURL}, nil
 	}
 
-	cooldownSeconds := groupConfig.ProxyPool.CooldownSeconds
+	selectableEntries := groupConfig.ProxyPool.SelectableEntries()
+	if len(selectableEntries) == 0 {
+		return Selection{}, fmt.Errorf("no enabled proxy in group proxy pool")
+	}
+
+	cooldownSeconds := groupConfig.ProxyPool.AutoEnableIntervalSeconds
 	if cooldownSeconds <= 0 {
-		cooldownSeconds = 60
+		cooldownSeconds = groupConfig.ProxyPool.CooldownSeconds
+		if cooldownSeconds <= 0 {
+			cooldownSeconds = 60
+		}
 	}
 
 	m.mu.Lock()
@@ -50,16 +58,15 @@ func (m *Manager) Select(group *models.Group, keyID uint) (Selection, error) {
 
 	now := time.Now()
 	groupPrefix := fmt.Sprintf("%d:", group.ID)
-	available := make([]string, 0, len(groupConfig.ProxyPool.Proxies))
-	currentProxySet := make(map[string]struct{}, len(groupConfig.ProxyPool.Proxies))
-	for _, proxyURL := range groupConfig.ProxyPool.Proxies {
-		proxyURL = strings.TrimSpace(proxyURL)
-		if proxyURL == "" {
-			continue
-		}
+	available := make([]string, 0, len(selectableEntries))
+	currentProxySet := make(map[string]struct{}, len(selectableEntries))
+	cooling := make([]string, 0, len(selectableEntries))
+	for _, entry := range selectableEntries {
+		proxyURL := entry.URL
 		currentProxySet[proxyURL] = struct{}{}
 		if until, blocked := m.unavailable[proxyStateKey(group.ID, proxyURL)]; blocked {
 			if now.Before(until) {
+				cooling = append(cooling, proxyURL)
 				continue
 			}
 			delete(m.unavailable, proxyStateKey(group.ID, proxyURL))
@@ -68,7 +75,14 @@ func (m *Manager) Select(group *models.Group, keyID uint) (Selection, error) {
 	}
 
 	if len(available) == 0 {
-		return Selection{}, fmt.Errorf("no available proxy in group proxy pool")
+		if len(cooling) == 0 {
+			return Selection{}, fmt.Errorf("no available proxy in group proxy pool")
+		}
+		// If every enabled proxy is in temporary cooldown, probe one early instead
+		// of failing the whole group. This avoids a single bad key/upstream incident
+		// turning into a prolonged full-pool outage.
+		available = append(available, cooling[0])
+		delete(m.unavailable, proxyStateKey(group.ID, cooling[0]))
 	}
 
 	affinityKey := fmt.Sprintf("%d:%d", group.ID, keyID)

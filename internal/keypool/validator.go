@@ -9,7 +9,6 @@ import (
 	"gpt-load/internal/models"
 	"gpt-load/internal/proxypool"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -84,7 +83,7 @@ func (s *KeyValidator) ValidateSingleKey(key *models.APIKey, group *models.Group
 		if validationErr == nil && proxySelection.FromPool {
 			s.proxyPool.MarkSuccess(group.ID, proxySelection.URL)
 		}
-		if validationErr != nil && proxySelection.FromPool && isValidationProxyError(validationErr) {
+		if validationErr != nil && proxySelection.FromPool && isValidationProxyError(validationErr, proxySelection.URL) {
 			s.proxyPool.MarkFailure(group.ID, key.ID, proxySelection.URL, proxySelection.CooldownSeconds)
 			lastProxyErr = validationErr
 			continue
@@ -136,20 +135,19 @@ func validateKeyWithClient(ctx context.Context, ch channel.ChannelProxy, key *mo
 	return ch.ValidateKey(ctx, key, group)
 }
 
-func isValidationTransportError(err error) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "failed to send validation request:")
-}
-
-func isValidationProxyError(err error) bool {
-	return isValidationTransportError(err) || proxypool.IsRecoverableErrorMessage(err.Error())
+func isValidationProxyError(err error, proxyURL string) bool {
+	return proxypool.IsProxyTransportError(err, proxyURL) || proxypool.IsRecoverableErrorMessage(err.Error())
 }
 
 func proxyPoolValidationAttempts(group *models.Group) int {
 	groupConfig, err := models.DecodeGroupConfig(group.Config)
-	if err != nil || groupConfig.ProxyPool == nil || len(groupConfig.ProxyPool.Proxies) == 0 {
+	if err != nil || groupConfig.ProxyPool == nil || len(groupConfig.ProxyPool.Entries()) == 0 {
 		return 1
 	}
-	return len(groupConfig.ProxyPool.Proxies)
+	if selectable := len(groupConfig.ProxyPool.SelectableEntries()); selectable > 0 {
+		return selectable
+	}
+	return 1
 }
 
 // TestMultipleKeys performs a synchronous validation for a list of key values within a specific group.

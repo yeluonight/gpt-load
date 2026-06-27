@@ -132,7 +132,7 @@ func (ps *ProxyServer) executeRequestWithRetry(
 ) {
 	cfg := group.EffectiveConfig
 
-	upstreamURL, err := channelHandler.BuildUpstreamURL(c.Request.URL, originalGroup.Name)
+	upstreamURL, err := channelHandler.BuildUpstreamURL(c.Request, originalGroup.Name)
 	if err != nil {
 		response.Error(c, app_errors.NewAPIError(app_errors.ErrInternalServer, fmt.Sprintf("Failed to build upstream URL: %v", err)))
 		return
@@ -262,7 +262,7 @@ func (ps *ProxyServer) executeRequestWithRetry(
 			logrus.Debugf("Request failed with status %d (attempt %d/%d) for key %s. Parsed Error: %s", statusCode, retryCount+1, cfg.MaxRetries, utils.MaskAPIKey(apiKey.KeyValue), parsedError)
 		}
 
-		if err != nil && proxySelection.FromPool {
+		if err != nil && proxySelection.FromPool && proxypool.IsProxyTransportError(err, proxySelection.URL) {
 			usageReservation.Release()
 			ps.proxyPool.MarkFailure(group.ID, apiKey.ID, proxySelection.URL, proxySelection.CooldownSeconds)
 			ps.logRequest(c, originalGroup, group, apiKey, startTime, statusCode, errors.New(parsedError), isStream, upstreamURL, channelHandler, finalBodyBytes, models.RequestTypeRetry)

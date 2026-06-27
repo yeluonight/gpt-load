@@ -351,12 +351,25 @@ export default {
     keyRequestLimitInvalid: "Invalid key request limit. Check the reset interval or reset time.",
     proxyPool: "Proxy Pool",
     proxyPoolTooltip:
-      "Configure multiple outbound proxies for this group. The system keeps a key on the same proxy when possible and spreads concurrent keys across proxies.",
+      "Configure multiple outbound proxies for this group. The pool takes priority over the normal proxy URL, keeps key affinity where possible, and spreads concurrent keys across proxies.",
     proxyPoolInputTooltip:
-      "One proxy URL per line. Comma-separated values are also supported. Empty uses the normal proxy setting.",
+      "One proxy URL per line. Comma-separated values are also supported. Add them to test, disable, or remove each proxy.",
     proxyCooldown: "Proxy cooldown seconds",
     proxyCooldownTooltip:
       "How long to skip a proxy after a transport error. 0 uses the default 60 seconds.",
+    addProxy: "Add proxy",
+    testProxy: "Test",
+    proxyTestOk: "Reachable",
+    proxyUntested: "Untested",
+    proxyTestFailed: "Proxy test failed",
+    proxyTestSuccess: "Proxy test successful ({duration})",
+    proxyDisabled: "Disabled",
+    proxyPermanentDisabled: "Long-term disabled",
+    proxyNotes: "Notes",
+    proxyUrlRequired: "Enter a proxy URL first",
+    proxyAutoEnableInterval: "Auto re-enable seconds",
+    proxyAutoEnableIntervalTooltip:
+      "How long an automatically skipped proxy waits before it can be selected again. Long-term disabled proxies are never auto-enabled.",
     groupConfig: "Group Configuration",
     groupConfigTooltip:
       "Group-specific configuration parameters like timeout, retry count, etc. These settings override global defaults",

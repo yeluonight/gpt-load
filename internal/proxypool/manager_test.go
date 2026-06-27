@@ -1,6 +1,7 @@
 package proxypool
 
 import (
+	"fmt"
 	"gpt-load/internal/models"
 	"testing"
 	"time"
@@ -111,6 +112,74 @@ func TestProxyPoolFallsBackToGroupProxyURLWhenPoolUnset(t *testing.T) {
 	}
 	if selection.URL != "http://127.0.0.1:7890" {
 		t.Fatalf("expected fallback proxy_url, got %s", selection.URL)
+	}
+}
+
+func TestProxyPoolSkipsManualDisabledItems(t *testing.T) {
+	manager := NewManager()
+	group := &models.Group{
+		ID: 1,
+		Config: datatypes.JSONMap{
+			"proxy_pool": map[string]any{
+				"items": []any{
+					map[string]any{"url": "http://127.0.0.1:1001", "disabled": true},
+					map[string]any{"url": "http://127.0.0.1:1002"},
+				},
+			},
+		},
+	}
+
+	selection, err := manager.Select(group, 1)
+	if err != nil {
+		t.Fatalf("select proxy: %v", err)
+	}
+	if selection.URL != "http://127.0.0.1:1002" {
+		t.Fatalf("expected enabled proxy, got %s", selection.URL)
+	}
+}
+
+func TestProxyPoolReprobesWhenAllEnabledProxiesAreCooling(t *testing.T) {
+	manager := NewManager()
+	group := &models.Group{
+		ID: 1,
+		Config: datatypes.JSONMap{
+			"proxy_pool": map[string]any{
+				"proxies": []any{
+					"http://127.0.0.1:1001",
+					"http://127.0.0.1:1002",
+				},
+				"auto_enable_interval_seconds": 600,
+			},
+		},
+	}
+
+	first, err := manager.Select(group, 1)
+	if err != nil {
+		t.Fatalf("select first proxy: %v", err)
+	}
+	manager.MarkFailure(group.ID, 1, first.URL, first.CooldownSeconds)
+	second, err := manager.Select(group, 2)
+	if err != nil {
+		t.Fatalf("select second proxy: %v", err)
+	}
+	manager.MarkFailure(group.ID, 2, second.URL, second.CooldownSeconds)
+
+	selection, err := manager.Select(group, 3)
+	if err != nil {
+		t.Fatalf("expected early reprobe instead of full pool failure: %v", err)
+	}
+	if selection.URL == "" {
+		t.Fatal("expected selected proxy")
+	}
+}
+
+func TestProxyTransportErrorRequiresProxyEvidence(t *testing.T) {
+	proxyURL := "http://127.0.0.1:1001"
+	if IsProxyTransportError(fmt.Errorf("context deadline exceeded while awaiting headers"), proxyURL) {
+		t.Fatal("generic upstream timeout should not be classified as proxy transport error")
+	}
+	if !IsProxyTransportError(fmt.Errorf("proxyconnect tcp: dial tcp 127.0.0.1:1001: connect: connection refused"), proxyURL) {
+		t.Fatal("proxyconnect failure should be classified as proxy transport error")
 	}
 }
 

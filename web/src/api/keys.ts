@@ -57,6 +57,29 @@ export const keysApi = {
     return res.data || [];
   },
 
+  async testProxy(
+    proxy_url: string,
+    target_url?: string
+  ): Promise<{
+    ok: boolean;
+    status_code?: number;
+    error?: string;
+    duration_ms: number;
+    checked_at: string;
+  }> {
+    const res = await http.post(
+      "/groups/test-proxy",
+      {
+        proxy_url,
+        target_url,
+      },
+      {
+        hideMessage: true,
+      }
+    );
+    return res.data;
+  },
+
   // 复制分组
   async copyGroup(
     groupId: number,

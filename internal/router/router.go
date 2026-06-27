@@ -113,6 +113,7 @@ func registerProtectedAPIRoutes(api *gin.RouterGroup, serverHandler *handler.Ser
 		groups.GET("", serverHandler.ListGroups)
 		groups.GET("/list", serverHandler.List)
 		groups.GET("/config-options", serverHandler.GetGroupConfigOptions)
+		groups.POST("/test-proxy", serverHandler.TestGroupProxy)
 		groups.PUT("/reorder", serverHandler.ReorderGroups)
 		groups.PUT("/:id", serverHandler.UpdateGroup)
 		groups.DELETE("/:id", serverHandler.DeleteGroup)

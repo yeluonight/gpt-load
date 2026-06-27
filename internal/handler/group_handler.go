@@ -3,12 +3,15 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	app_errors "gpt-load/internal/errors"
+	"gpt-load/internal/httpclient"
 	"gpt-load/internal/i18n"
 	"gpt-load/internal/models"
 	"gpt-load/internal/response"
@@ -143,6 +146,19 @@ type GroupReorderRequest struct {
 	Items []GroupReorderItemRequest `json:"items"`
 }
 
+type ProxyTestRequest struct {
+	ProxyURL  string `json:"proxy_url"`
+	TargetURL string `json:"target_url"`
+}
+
+type ProxyTestResponse struct {
+	OK         bool   `json:"ok"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Error      string `json:"error,omitempty"`
+	DurationMS int64  `json:"duration_ms"`
+	CheckedAt  string `json:"checked_at"`
+}
+
 func validateGroupReorderItems(items []GroupReorderItemRequest) error {
 	if len(items) == 0 {
 		return services.NewI18nError(app_errors.ErrValidation, "validation.reorder_items_required", nil)
@@ -163,6 +179,76 @@ func validateGroupReorderItems(items []GroupReorderItemRequest) error {
 	}
 
 	return nil
+}
+
+func (s *Server) TestGroupProxy(c *gin.Context) {
+	var req ProxyTestRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Error(c, app_errors.NewAPIError(app_errors.ErrInvalidJSON, err.Error()))
+		return
+	}
+
+	proxyURL := strings.TrimSpace(req.ProxyURL)
+	targetURL := strings.TrimSpace(req.TargetURL)
+	if proxyURL == "" {
+		response.ErrorI18nFromAPIError(c, app_errors.ErrBadRequest, "validation.invalid_proxy_url")
+		return
+	}
+	if targetURL == "" {
+		targetURL = "https://generativelanguage.googleapis.com"
+	}
+
+	parsedProxy, err := url.Parse(proxyURL)
+	if err != nil || parsedProxy.Scheme == "" || parsedProxy.Host == "" {
+		response.ErrorI18nFromAPIError(c, app_errors.ErrBadRequest, "validation.invalid_proxy_url")
+		return
+	}
+	parsedTarget, err := url.Parse(targetURL)
+	if err != nil || parsedTarget.Scheme == "" || parsedTarget.Host == "" {
+		response.Error(c, app_errors.NewAPIError(app_errors.ErrBadRequest, "invalid target_url"))
+		return
+	}
+
+	client := s.HTTPClientManager.GetClient(&httpclient.Config{
+		ConnectTimeout:        10 * time.Second,
+		RequestTimeout:        15 * time.Second,
+		IdleConnTimeout:       30 * time.Second,
+		MaxIdleConns:          10,
+		MaxIdleConnsPerHost:   10,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ProxyURL:              parsedProxy.String(),
+		DisableCompression:    true,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	})
+
+	start := time.Now()
+	request, err := http.NewRequestWithContext(c.Request.Context(), http.MethodHead, parsedTarget.String(), nil)
+	if err != nil {
+		response.Error(c, app_errors.NewAPIError(app_errors.ErrBadRequest, err.Error()))
+		return
+	}
+	resp, err := client.Do(request)
+	duration := time.Since(start).Milliseconds()
+	result := ProxyTestResponse{
+		OK:         err == nil,
+		DurationMS: duration,
+		CheckedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	if err != nil {
+		result.Error = err.Error()
+		response.Success(c, result)
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	result.StatusCode = resp.StatusCode
+	if resp.StatusCode == http.StatusProxyAuthRequired {
+		result.OK = false
+		result.Error = "proxy authentication required"
+	}
+	response.Success(c, result)
 }
 
 // UpdateGroup handles updating an existing group.

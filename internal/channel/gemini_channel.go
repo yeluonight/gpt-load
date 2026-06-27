@@ -38,9 +38,9 @@ func newGeminiChannel(f *Factory, group *models.Group) (ChannelProxy, error) {
 
 // BuildUpstreamURL maps OpenAI-style model-list requests to Gemini's native
 // model list endpoint while preserving all other Gemini paths.
-func (ch *GeminiChannel) BuildUpstreamURL(originalURL *url.URL, groupName string) (string, error) {
-	requestPath := strings.TrimPrefix(originalURL.Path, "/proxy/"+groupName)
-	if requestPath == "/v1/models" {
+func (ch *GeminiChannel) BuildUpstreamURL(req *http.Request, groupName string) (string, error) {
+	requestPath := strings.TrimPrefix(req.URL.Path, "/proxy/"+groupName)
+	if req.Method == http.MethodGet && requestPath == "/v1/models" {
 		base := ch.getUpstreamURL()
 		if base == nil {
 			return "", fmt.Errorf("no upstream URL configured for channel %s", ch.Name)
@@ -48,11 +48,11 @@ func (ch *GeminiChannel) BuildUpstreamURL(originalURL *url.URL, groupName string
 
 		finalURL := *base
 		finalURL.Path = joinGeminiNativeModelListPath(finalURL.Path)
-		finalURL.RawQuery = originalURL.RawQuery
+		finalURL.RawQuery = req.URL.RawQuery
 		return finalURL.String(), nil
 	}
 
-	return ch.BaseChannel.BuildUpstreamURL(originalURL, groupName)
+	return ch.BaseChannel.BuildUpstreamURL(req, groupName)
 }
 
 func joinGeminiNativeModelListPath(basePath string) string {

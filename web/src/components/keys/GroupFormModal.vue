@@ -57,6 +57,17 @@ interface RequestLimitForm {
 
 type KeyRequestLimitForm = RequestLimitForm;
 
+interface ProxyPoolItemForm {
+  url: string;
+  disabled: boolean;
+  permanent_disabled: boolean;
+  notes: string;
+  last_test_ok: boolean | null;
+  last_test_error: string;
+  last_test_at: string;
+  testing: boolean;
+}
+
 // Header规则类型
 interface HeaderRuleItem {
   key: string;
@@ -105,8 +116,10 @@ interface GroupFormData {
   configItems: ConfigItem[];
   model_rate_limits: ModelRateLimitItem[];
   key_request_limit: KeyRequestLimitForm;
-  proxy_pool: string;
+  proxy_pool_items: ProxyPoolItemForm[];
+  proxy_pool_new_url: string;
   proxy_pool_cooldown_seconds: number;
+  proxy_pool_auto_enable_interval_seconds: number;
   header_rules: HeaderRuleItem[];
   proxy_keys: string;
   group_type?: string;
@@ -134,8 +147,10 @@ const formData = reactive<GroupFormData>({
   configItems: [] as ConfigItem[],
   model_rate_limits: [] as ModelRateLimitItem[],
   key_request_limit: createRequestLimitDefaults(),
-  proxy_pool: "",
+  proxy_pool_items: [] as ProxyPoolItemForm[],
+  proxy_pool_new_url: "",
   proxy_pool_cooldown_seconds: 60,
+  proxy_pool_auto_enable_interval_seconds: 60,
   header_rules: [] as HeaderRuleItem[],
   proxy_keys: "",
   group_type: "standard",
@@ -344,8 +359,10 @@ function resetForm() {
     configItems: [],
     model_rate_limits: [],
     key_request_limit: createRequestLimitDefaults(),
-    proxy_pool: "",
+    proxy_pool_items: [],
+    proxy_pool_new_url: "",
     proxy_pool_cooldown_seconds: 60,
+    proxy_pool_auto_enable_interval_seconds: 60,
     header_rules: [],
     proxy_keys: "",
     group_type: "standard",
@@ -400,8 +417,10 @@ function loadGroupData() {
     configItems,
     model_rate_limits: normalizeModelRateLimits(modelRateLimits),
     key_request_limit: normalizedKeyRequestLimit,
-    proxy_pool: normalizedProxyPool.proxies.join("\n"),
+    proxy_pool_items: normalizedProxyPool.items,
+    proxy_pool_new_url: "",
     proxy_pool_cooldown_seconds: normalizedProxyPool.cooldown_seconds,
+    proxy_pool_auto_enable_interval_seconds: normalizedProxyPool.auto_enable_interval_seconds,
     header_rules: (props.group.header_rules || []).map((rule: HeaderRuleItem) => ({
       key: rule.key || "",
       value: rule.value || "",
@@ -497,27 +516,96 @@ function normalizeKeyRequestLimit(value: unknown): KeyRequestLimitForm {
   return normalizeRequestLimit(value);
 }
 
-function normalizeProxyPool(value: unknown): { proxies: string[]; cooldown_seconds: number } {
+function createProxyPoolItem(url = ""): ProxyPoolItemForm {
+  return {
+    url,
+    disabled: false,
+    permanent_disabled: false,
+    notes: "",
+    last_test_ok: null,
+    last_test_error: "",
+    last_test_at: "",
+    testing: false,
+  };
+}
+
+function normalizeProxyPool(value: unknown): {
+  items: ProxyPoolItemForm[];
+  cooldown_seconds: number;
+  auto_enable_interval_seconds: number;
+} {
+  const defaults = {
+    items: [] as ProxyPoolItemForm[],
+    cooldown_seconds: 60,
+    auto_enable_interval_seconds: 60,
+  };
   if (!value) {
-    return { proxies: [], cooldown_seconds: 60 };
+    return defaults;
   }
   if (typeof value === "string") {
-    return { proxies: splitProxyText(value), cooldown_seconds: 60 };
+    return { ...defaults, items: splitProxyText(value).map(url => createProxyPoolItem(url)) };
   }
   if (Array.isArray(value)) {
-    return { proxies: value.map(item => String(item)).filter(Boolean), cooldown_seconds: 60 };
+    return {
+      ...defaults,
+      items: value.map(item => createProxyPoolItem(String(item))).filter(item => item.url),
+    };
   }
   if (typeof value === "object") {
     const record = value as Record<string, unknown>;
-    const proxies = Array.isArray(record.proxies)
-      ? record.proxies.map(item => String(item)).filter(Boolean)
+    let items: ProxyPoolItemForm[] = [];
+    if (Array.isArray(record.items)) {
+      items = record.items
+        .map(item => normalizeProxyPoolItem(item))
+        .filter((item): item is ProxyPoolItemForm => !!item);
+    }
+    const legacyItems = Array.isArray(record.proxies)
+      ? record.proxies.map(item => createProxyPoolItem(String(item))).filter(item => item.url)
       : [];
+    const byURL = new Map<string, ProxyPoolItemForm>();
+    for (const item of [...items, ...legacyItems]) {
+      if (!byURL.has(item.url)) {
+        byURL.set(item.url, item);
+      }
+    }
+    const cooldownSeconds =
+      typeof record.cooldown_seconds === "number"
+        ? record.cooldown_seconds
+        : defaults.cooldown_seconds;
     return {
-      proxies,
-      cooldown_seconds: typeof record.cooldown_seconds === "number" ? record.cooldown_seconds : 60,
+      items: Array.from(byURL.values()),
+      cooldown_seconds: cooldownSeconds,
+      auto_enable_interval_seconds:
+        typeof record.auto_enable_interval_seconds === "number"
+          ? record.auto_enable_interval_seconds
+          : cooldownSeconds,
     };
   }
-  return { proxies: [], cooldown_seconds: 60 };
+  return defaults;
+}
+
+function normalizeProxyPoolItem(value: unknown): ProxyPoolItemForm | null {
+  if (typeof value === "string") {
+    return createProxyPoolItem(value);
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const url = typeof record.url === "string" ? record.url.trim() : "";
+  if (!url) {
+    return null;
+  }
+  return {
+    url,
+    disabled: record.disabled === true,
+    permanent_disabled: record.permanent_disabled === true,
+    notes: typeof record.notes === "string" ? record.notes : "",
+    last_test_ok: typeof record.last_test_ok === "boolean" ? record.last_test_ok : null,
+    last_test_error: typeof record.last_test_error === "string" ? record.last_test_error : "",
+    last_test_at: typeof record.last_test_at === "string" ? record.last_test_at : "",
+    testing: false,
+  };
 }
 
 function splitProxyText(value: string): string[] {
@@ -525,6 +613,82 @@ function splitProxyText(value: string): string[] {
     .split(/[\n\r,]+/)
     .map(item => item.trim())
     .filter(Boolean);
+}
+
+function addProxyPoolItem() {
+  const urls = splitProxyText(formData.proxy_pool_new_url);
+  if (urls.length === 0) {
+    return;
+  }
+  const existing = new Set(formData.proxy_pool_items.map(item => item.url));
+  for (const url of urls) {
+    if (existing.has(url)) {
+      continue;
+    }
+    formData.proxy_pool_items.push(createProxyPoolItem(url));
+    existing.add(url);
+  }
+  formData.proxy_pool_new_url = "";
+}
+
+function removeProxyPoolItem(index: number) {
+  formData.proxy_pool_items.splice(index, 1);
+}
+
+function proxyPoolTargetURL(): string {
+  const firstUpstream = formData.upstreams.find(upstream => upstream.url.trim());
+  return firstUpstream?.url.trim() || upstreamPlaceholder.value;
+}
+
+async function testProxyPoolItem(item: ProxyPoolItemForm) {
+  if (!item.url.trim()) {
+    message.error(t("keys.proxyUrlRequired"));
+    return;
+  }
+
+  item.testing = true;
+  try {
+    const result = await keysApi.testProxy(item.url.trim(), proxyPoolTargetURL());
+    item.last_test_ok = result.ok;
+    item.last_test_error = result.error || "";
+    item.last_test_at = result.checked_at;
+    if (result.ok) {
+      message.success(t("keys.proxyTestSuccess", { duration: `${result.duration_ms}ms` }));
+    } else {
+      message.error(result.error || t("keys.proxyTestFailed"));
+    }
+  } catch (_error) {
+    item.last_test_ok = false;
+    item.last_test_error = t("keys.proxyTestFailed");
+    item.last_test_at = new Date().toISOString();
+  } finally {
+    item.testing = false;
+  }
+}
+
+function buildProxyPoolPayload(): Record<string, unknown> | null {
+  const items = formData.proxy_pool_items
+    .map(item => ({
+      url: item.url.trim(),
+      disabled: item.disabled,
+      permanent_disabled: item.permanent_disabled,
+      notes: item.notes.trim(),
+      last_test_ok: item.last_test_ok,
+      last_test_error: item.last_test_error,
+      last_test_at: item.last_test_at,
+    }))
+    .filter(item => item.url);
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return {
+    proxies: items.map(item => item.url),
+    items,
+    cooldown_seconds: formData.proxy_pool_cooldown_seconds || 60,
+    auto_enable_interval_seconds: formData.proxy_pool_auto_enable_interval_seconds || 60,
+  };
 }
 
 function normalizeDailyResetTime(value: string): string | null {
@@ -753,12 +917,9 @@ async function handleSubmit() {
       config.key_request_limit = keyRequestLimit;
     }
 
-    const proxies = splitProxyText(formData.proxy_pool);
-    if (proxies.length > 0) {
-      config.proxy_pool = {
-        proxies,
-        cooldown_seconds: formData.proxy_pool_cooldown_seconds || 60,
-      };
+    const proxyPool = buildProxyPoolPayload();
+    if (proxyPool) {
+      config.proxy_pool = proxyPool;
     }
 
     // 构建提交数据
@@ -1246,10 +1407,10 @@ async function handleSubmit() {
                   </n-tooltip>
                 </h5>
 
-                <n-form-item path="proxy_pool">
+                <n-form-item path="proxy_pool_new_url">
                   <template #label>
                     <div class="form-label-with-tooltip">
-                      {{ t("keys.proxyPool") }}
+                      {{ t("keys.addProxy") }}
                       <n-tooltip trigger="hover" placement="top">
                         <template #trigger>
                           <n-icon :component="HelpCircleOutline" class="help-icon config-help" />
@@ -1258,33 +1419,93 @@ async function handleSubmit() {
                       </n-tooltip>
                     </div>
                   </template>
-                  <n-input
-                    v-model:value="formData.proxy_pool"
-                    type="textarea"
-                    placeholder="http://127.0.0.1:7890"
-                    :rows="4"
-                  />
+                  <div class="proxy-pool-add-row">
+                    <n-input
+                      v-model:value="formData.proxy_pool_new_url"
+                      type="textarea"
+                      placeholder="http://127.0.0.1:7890"
+                      :rows="2"
+                    />
+                    <n-button type="primary" ghost @click="addProxyPoolItem">
+                      <template #icon>
+                        <n-icon :component="Add" />
+                      </template>
+                      {{ t("common.add") }}
+                    </n-button>
+                  </div>
                 </n-form-item>
 
-                <n-form-item path="proxy_pool_cooldown_seconds">
-                  <template #label>
-                    <div class="form-label-with-tooltip">
-                      {{ t("keys.proxyCooldown") }}
-                      <n-tooltip trigger="hover" placement="top">
-                        <template #trigger>
-                          <n-icon :component="HelpCircleOutline" class="help-icon config-help" />
-                        </template>
-                        {{ t("keys.proxyCooldownTooltip") }}
-                      </n-tooltip>
+                <div class="proxy-pool-settings">
+                  <n-form-item path="proxy_pool_auto_enable_interval_seconds">
+                    <template #label>
+                      <div class="form-label-with-tooltip">
+                        {{ t("keys.proxyAutoEnableInterval") }}
+                        <n-tooltip trigger="hover" placement="top">
+                          <template #trigger>
+                            <n-icon :component="HelpCircleOutline" class="help-icon config-help" />
+                          </template>
+                          {{ t("keys.proxyAutoEnableIntervalTooltip") }}
+                        </n-tooltip>
+                      </div>
+                    </template>
+                    <n-input-number
+                      v-model:value="formData.proxy_pool_auto_enable_interval_seconds"
+                      :min="0"
+                      :precision="0"
+                      style="width: 100%"
+                    />
+                  </n-form-item>
+                </div>
+
+                <div class="proxy-pool-list">
+                  <div
+                    v-for="(item, index) in formData.proxy_pool_items"
+                    :key="`${item.url}-${index}`"
+                    class="proxy-pool-row"
+                  >
+                    <div class="proxy-url-cell">
+                      <n-input v-model:value="item.url" placeholder="http://127.0.0.1:7890" />
+                      <div class="proxy-test-status">
+                        <span v-if="item.last_test_ok === true" class="proxy-test-ok">
+                          {{ t("keys.proxyTestOk") }}
+                        </span>
+                        <span v-else-if="item.last_test_ok === false" class="proxy-test-failed">
+                          {{ item.last_test_error || t("keys.proxyTestFailed") }}
+                        </span>
+                        <span v-else>{{ t("keys.proxyUntested") }}</span>
+                      </div>
                     </div>
-                  </template>
-                  <n-input-number
-                    v-model:value="formData.proxy_pool_cooldown_seconds"
-                    :min="0"
-                    :precision="0"
-                    style="width: 100%"
-                  />
-                </n-form-item>
+                    <n-input
+                      v-model:value="item.notes"
+                      class="proxy-notes-cell"
+                      :placeholder="t('keys.proxyNotes')"
+                    />
+                    <div class="proxy-switch-cell">
+                      <span>{{ t("keys.proxyDisabled") }}</span>
+                      <n-switch v-model:value="item.disabled" />
+                    </div>
+                    <div class="proxy-switch-cell">
+                      <span>{{ t("keys.proxyPermanentDisabled") }}</span>
+                      <n-switch v-model:value="item.permanent_disabled" />
+                    </div>
+                    <div class="proxy-actions-cell">
+                      <n-button
+                        size="small"
+                        type="primary"
+                        ghost
+                        :loading="item.testing"
+                        @click="testProxyPoolItem(item)"
+                      >
+                        {{ t("keys.testProxy") }}
+                      </n-button>
+                      <n-button size="small" circle quaternary @click="removeProxyPoolItem(index)">
+                        <template #icon>
+                          <n-icon :component="Remove" />
+                        </template>
+                      </n-button>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div class="config-section">
@@ -1911,6 +2132,77 @@ async function handleSubmit() {
   width: 100%;
 }
 
+.proxy-pool-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 12px;
+  width: 100%;
+  align-items: flex-start;
+}
+
+.proxy-pool-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.proxy-pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.proxy-pool-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(120px, 180px) 96px 120px 150px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.proxy-url-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.proxy-notes-cell {
+  min-width: 0;
+}
+
+.proxy-test-status {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.proxy-test-ok {
+  color: var(--success-color);
+}
+
+.proxy-test-failed {
+  color: var(--error-color);
+}
+
+.proxy-switch-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.proxy-actions-cell {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @media (max-width: 768px) {
   .group-form-card {
     width: 100vw !important;
@@ -1957,6 +2249,15 @@ async function handleSubmit() {
 
   .key-request-limit-content {
     grid-template-columns: 1fr;
+  }
+
+  .proxy-pool-add-row,
+  .proxy-pool-row {
+    grid-template-columns: 1fr;
+  }
+
+  .proxy-actions-cell {
+    justify-content: flex-start;
   }
 
   .upstream-actions,

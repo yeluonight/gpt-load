@@ -351,12 +351,25 @@ export default {
       "キーリクエスト制限が無効です。リセット周期または時刻を確認してください。",
     proxyPool: "プロキシプール",
     proxyPoolTooltip:
-      "このグループに複数の送信プロキシを設定します。可能な限り同じキーを同じプロキシに固定し、同時実行時はキーを複数プロキシへ分散します。",
+      "このグループに複数の送信プロキシを設定します。通常のプロキシURLより優先され、可能な限り同じキーを同じプロキシに固定し、同時実行時は出口を分散します。",
     proxyPoolInputTooltip:
-      "1行に1つのプロキシURLを入力します。カンマ区切りにも対応します。空の場合は通常のプロキシ設定を使用します。",
+      "1行に1つのプロキシURLを入力します。カンマ区切りにも対応します。追加後に個別テスト、無効化、削除できます。",
     proxyCooldown: "プロキシ冷却秒数",
     proxyCooldownTooltip:
       "転送エラー後にそのプロキシを一時的にスキップする時間です。0の場合は既定の60秒を使用します。",
+    addProxy: "プロキシ追加",
+    testProxy: "テスト",
+    proxyTestOk: "接続正常",
+    proxyUntested: "未テスト",
+    proxyTestFailed: "プロキシテスト失敗",
+    proxyTestSuccess: "プロキシテスト成功 ({duration})",
+    proxyDisabled: "無効",
+    proxyPermanentDisabled: "長期無効",
+    proxyNotes: "メモ",
+    proxyUrlRequired: "先にプロキシURLを入力してください",
+    proxyAutoEnableInterval: "自動再有効化秒数",
+    proxyAutoEnableIntervalTooltip:
+      "自動的にスキップされたプロキシが再び選択可能になるまでの秒数です。長期無効のプロキシは自動有効化されません。",
     groupConfig: "グループ設定",
     groupConfigTooltip:
       "タイムアウト、リトライ回数などのグループ固有の設定パラメーター。これらの設定はグローバルデフォルトを上書きします",

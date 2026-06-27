@@ -4,7 +4,6 @@ import (
 	"context"
 	"gpt-load/internal/models"
 	"net/http"
-	"net/url"
 
 	"github.com/gin-gonic/gin"
 )
@@ -12,7 +11,7 @@ import (
 // ChannelProxy defines the interface for different API channel proxies.
 type ChannelProxy interface {
 	// BuildUpstreamURL constructs the target URL for the upstream service.
-	BuildUpstreamURL(originalURL *url.URL, groupName string) (string, error)
+	BuildUpstreamURL(req *http.Request, groupName string) (string, error)
 
 	// IsConfigStale checks if the channel's configuration is stale compared to the provided group.
 	IsConfigStale(group *models.Group) bool
