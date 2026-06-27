@@ -10,6 +10,8 @@ A high-performance, enterprise-grade AI API transparent proxy service designed s
 
 For detailed documentation, please visit [Official Documentation](https://www.gpt-load.com/docs?lang=en)
 
+> This repository is a fork of [tbphp/gpt-load](https://github.com/tbphp/gpt-load). Except for the Docker image path changing to `ghcr.io/yeluonight/gpt-load:latest`, the default `docker-compose.yml`, `.env` static configuration, and existing group configuration remain compatible. Fork additions are optional group-level settings and keep upstream behavior when unset.
+
 <a href="https://trendshift.io/repositories/14880" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14880" alt="tbphp%2Fgpt-load | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 <a href="https://hellogithub.com/repository/tbphp/gpt-load" target="_blank"><img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=554dc4c46eb14092b9b0c56f1eb9021c&claim_uid=Qlh8vzrWJ0HCneG" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" /></a>
 
@@ -45,6 +47,8 @@ For detailed documentation, please visit [Official Documentation](https://www.gp
 - **High-Performance Design**: Zero-copy streaming, connection pool reuse, and atomic operations
 - **Production Ready**: Graceful shutdown, error recovery, and comprehensive security mechanisms
 - **Dual Authentication**: Separate authentication for management and proxy, with proxy authentication supporting global and group-level keys
+- **Group Usage Protection**: Configure per-key RPM/TPM limits by model and optional per-key request quotas per reset window
+- **Group Proxy Pool**: Configure outbound proxy pools directly on groups, keeping a key sticky to one proxy where possible while spreading concurrent keys across proxy exits
 
 ## Supported AI Services
 
@@ -70,7 +74,7 @@ docker run -d --name gpt-load \
     -p 3001:3001 \
     -e AUTH_KEY=your-secure-key-here \
     -v "$(pwd)/data":/app/data \
-    ghcr.io/tbphp/gpt-load:latest
+    ghcr.io/yeluonight/gpt-load:latest
 ```
 
 > Please change `your-secure-key-here` to a strong password (never use the default value), then you can log in to the management interface: <http://localhost:3001>
@@ -84,8 +88,8 @@ docker run -d --name gpt-load \
 mkdir -p gpt-load && cd gpt-load
 
 # Download configuration files
-wget https://raw.githubusercontent.com/tbphp/gpt-load/refs/heads/main/docker-compose.yml
-wget -O .env https://raw.githubusercontent.com/tbphp/gpt-load/refs/heads/main/.env.example
+wget https://raw.githubusercontent.com/yeluonight/gpt-load/refs/heads/main/docker-compose.yml
+wget -O .env https://raw.githubusercontent.com/yeluonight/gpt-load/refs/heads/main/.env.example
 
 # Edit the .env file and change AUTH_KEY to a strong password. Never use default or simple keys like sk-123456.
 
@@ -128,7 +132,7 @@ Source build requires a locally installed database (SQLite, MySQL, or PostgreSQL
 
 ```bash
 # Clone and build
-git clone https://github.com/tbphp/gpt-load.git
+git clone https://github.com/yeluonight/gpt-load.git
 cd gpt-load
 go mod tidy
 
@@ -271,6 +275,7 @@ Supported Proxy Protocol Formats:
 | Max Idle Connections          | `max_idle_conns`          | 100     | ✅             | Connection pool maximum total idle connections                      |
 | Max Idle Connections Per Host | `max_idle_conns_per_host` | 50      | ✅             | Maximum idle connections per upstream host                          |
 | Proxy URL                     | `proxy_url`               | -       | ✅             | HTTP/HTTPS proxy for forwarding requests, uses environment if empty |
+| Group Proxy Pool              | `proxy_pool`              | -       | ✅             | Multiple HTTP/HTTPS proxies for the group; keeps key-to-proxy affinity where possible and temporarily switches when a proxy is unavailable |
 
 **Key Configuration:**
 
@@ -281,8 +286,39 @@ Supported Proxy Protocol Formats:
 | Key Validation Interval    | `key_validation_interval_minutes` | 60      | ✅             | Background scheduled key validation cycle (minutes)                        |
 | Key Validation Concurrency | `key_validation_concurrency`      | 10      | ✅             | Concurrency for background validation of invalid keys                      |
 | Key Validation Timeout     | `key_validation_timeout_seconds`  | 20      | ✅             | API request timeout for validating individual keys in background (seconds) |
+| Model RPM/TPM Limits       | `model_rate_limits`               | -       | ✅             | Per-key per-model request and token limits; limited keys are skipped       |
+| Key Request Quota          | `key_request_limit`               | -       | ✅             | Per-key request quota per reset window; supports interval or daily reset   |
 
 </details>
+
+### Fork Group Configuration Additions
+
+All fields below are optional group configuration fields. Existing configurations do not need migration.
+
+```json
+{
+  "model_rate_limits": [
+    { "model": "gpt-4.1-mini", "rpm": 60, "tpm": 120000 },
+    { "model": "*", "rpm": 30 }
+  ],
+  "key_request_limit": {
+    "max_requests": 1000,
+    "reset_mode": "daily",
+    "reset_time": "00:00"
+  },
+  "proxy_pool": {
+    "proxies": [
+      "http://user:pass@proxy-a.example:8080",
+      "http://user:pass@proxy-b.example:8080"
+    ],
+    "cooldown_seconds": 60
+  }
+}
+```
+
+- `model_rate_limits`: `model` supports exact model names, and `*` acts as the default limit. Either `rpm` or `tpm` must be greater than 0.
+- `key_request_limit`: `reset_mode` supports `interval` and `daily`; `interval` uses `interval_minutes`, while `daily` uses `reset_time`. Time accepts `HH:MM` or `HH:MM:SS`.
+- `proxy_pool`: accepts an object, string array, or newline/comma-separated string. Unavailable proxies enter a temporary cooldown and requests switch to another available proxy.
 
 ## Data Encryption Migration
 
