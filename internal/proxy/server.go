@@ -17,6 +17,7 @@ import (
 	app_errors "gpt-load/internal/errors"
 	"gpt-load/internal/keypool"
 	"gpt-load/internal/models"
+	"gpt-load/internal/proxypool"
 	"gpt-load/internal/response"
 	"gpt-load/internal/services"
 	"gpt-load/internal/utils"
@@ -34,7 +35,7 @@ type ProxyServer struct {
 	channelFactory    *channel.Factory
 	requestLogService *services.RequestLogService
 	encryptionSvc     encryption.Service
-	proxyPool         *proxyPoolManager
+	proxyPool         *proxypool.Manager
 }
 
 // NewProxyServer creates a new proxy server
@@ -46,8 +47,8 @@ func NewProxyServer(
 	channelFactory *channel.Factory,
 	requestLogService *services.RequestLogService,
 	encryptionSvc encryption.Service,
+	proxyPool *proxypool.Manager,
 ) (*ProxyServer, error) {
-	proxyPool := newProxyPoolManager()
 	keyProvider.SetProxyAffinityCleaner(proxyPool)
 
 	return &ProxyServer{
@@ -179,6 +180,7 @@ func (ps *ProxyServer) executeRequestWithRetry(
 
 	modelForLimit := extractModelForRequest(req, c, channelHandler, finalBodyBytes)
 	tokenEstimate := estimateRequestTokens(finalBodyBytes)
+	c.Set("outbound_proxy_url", "")
 	apiKey, usageReservation, err := ps.keyProvider.SelectKeyForRequest(group, modelForLimit, tokenEstimate)
 	if err != nil {
 		logrus.Errorf("Failed to select a key for group %s on attempt %d: %v", group.Name, retryCount+1, err)
@@ -194,6 +196,7 @@ func (ps *ProxyServer) executeRequestWithRetry(
 		ps.logRequest(c, originalGroup, group, apiKey, startTime, http.StatusServiceUnavailable, err, isStream, upstreamURL, channelHandler, finalBodyBytes, models.RequestTypeFinal)
 		return
 	}
+	c.Set("outbound_proxy_url", proxySelection.URL)
 
 	channelHandler.ModifyRequest(req, apiKey, group)
 
@@ -266,6 +269,13 @@ func (ps *ProxyServer) executeRequestWithRetry(
 			ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, bodyBytes, isStream, startTime, retryCount)
 			return
 		}
+		if err == nil && proxySelection.FromPool && isProxyPoolRecoverableUpstreamStatus(statusCode, parsedError) {
+			usageReservation.Release()
+			ps.proxyPool.MarkFailure(group.ID, apiKey.ID, proxySelection.URL, proxySelection.CooldownSeconds)
+			ps.logRequest(c, originalGroup, group, apiKey, startTime, statusCode, errors.New(parsedError), isStream, upstreamURL, channelHandler, finalBodyBytes, models.RequestTypeRetry)
+			ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, bodyBytes, isStream, startTime, retryCount)
+			return
+		}
 
 		// 判断是否为最后一次尝试
 		isLastAttempt := retryCount >= cfg.MaxRetries
@@ -318,6 +328,10 @@ func (ps *ProxyServer) executeRequestWithRetry(
 	ps.logRequest(c, originalGroup, group, apiKey, startTime, resp.StatusCode, nil, isStream, upstreamURL, channelHandler, finalBodyBytes, models.RequestTypeFinal)
 }
 
+func isProxyPoolRecoverableUpstreamStatus(statusCode int, parsedError string) bool {
+	return statusCode >= 400 && proxypool.IsRecoverableErrorMessage(parsedError)
+}
+
 func shouldFailoverOnStatusCode(statusCode int, group *models.Group) bool {
 	if group == nil {
 		return false
@@ -350,22 +364,25 @@ func (ps *ProxyServer) logRequest(
 		requestBodyToLog = utils.TruncateString(string(bodyBytes), 65000)
 		userAgent = c.Request.UserAgent()
 	}
+	outboundProxy, _ := c.Get("outbound_proxy_url")
+	outboundProxyURL, _ := outboundProxy.(string)
 
 	duration := time.Since(startTime).Milliseconds()
 
 	logEntry := &models.RequestLog{
-		GroupID:      group.ID,
-		GroupName:    group.Name,
-		IsSuccess:    finalError == nil && statusCode < 400,
-		SourceIP:     c.ClientIP(),
-		StatusCode:   statusCode,
-		RequestPath:  utils.TruncateString(c.Request.URL.String(), 500),
-		Duration:     duration,
-		UserAgent:    userAgent,
-		RequestType:  requestType,
-		IsStream:     isStream,
-		UpstreamAddr: utils.TruncateString(upstreamAddr, 500),
-		RequestBody:  requestBodyToLog,
+		GroupID:       group.ID,
+		GroupName:     group.Name,
+		IsSuccess:     finalError == nil && statusCode < 400,
+		SourceIP:      c.ClientIP(),
+		StatusCode:    statusCode,
+		RequestPath:   utils.TruncateString(c.Request.URL.String(), 500),
+		Duration:      duration,
+		UserAgent:     userAgent,
+		RequestType:   requestType,
+		IsStream:      isStream,
+		UpstreamAddr:  utils.TruncateString(upstreamAddr, 500),
+		OutboundProxy: utils.TruncateString(outboundProxyURL, 500),
+		RequestBody:   requestBodyToLog,
 	}
 
 	// Set parent group

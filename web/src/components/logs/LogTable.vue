@@ -342,6 +342,14 @@ const allColumnConfigs: ColumnConfig[] = [
       h(NEllipsis, { style: "max-width: 580px" }, { default: () => row.upstream_addr || "-" }),
   },
   {
+    key: "outbound_proxy",
+    title: t("logs.outboundProxy"),
+    width: 360,
+    defaultVisible: true,
+    render: (row: LogRow) =>
+      h(NEllipsis, { style: "max-width: 340px" }, { default: () => row.outbound_proxy || "-" }),
+  },
+  {
     key: "error_message",
     title: t("logs.errorMessage"),
     width: 600,
@@ -852,6 +860,24 @@ const deselectAllColumns = () => {
                 </div>
                 <div class="compact-field-content">
                   {{ selectedLog.upstream_addr }}
+                </div>
+              </div>
+
+              <div class="compact-field" v-if="selectedLog.outbound_proxy">
+                <div class="compact-field-header">
+                  <span class="compact-field-title">{{ t("logs.outboundProxy") }}</span>
+                  <n-button
+                    size="tiny"
+                    text
+                    @click="copyContent(selectedLog.outbound_proxy || '', t('logs.outboundProxy'))"
+                  >
+                    <template #icon>
+                      <n-icon :component="CopyOutline" />
+                    </template>
+                  </n-button>
+                </div>
+                <div class="compact-field-content">
+                  {{ selectedLog.outbound_proxy }}
                 </div>
               </div>
 

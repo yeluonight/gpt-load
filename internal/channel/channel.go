@@ -41,3 +41,9 @@ type ChannelProxy interface {
 	// TransformModelList transforms the model list response based on redirect rules.
 	TransformModelList(req *http.Request, bodyBytes []byte, group *models.Group) (map[string]any, error)
 }
+
+// ClientValidator allows callers to validate a key with a request-specific
+// HTTP client, such as a client bound to a selected proxy pool entry.
+type ClientValidator interface {
+	ValidateKeyWithClient(ctx context.Context, apiKey *models.APIKey, group *models.Group, client *http.Client) (bool, error)
+}

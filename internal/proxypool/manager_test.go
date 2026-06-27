@@ -1,4 +1,4 @@
-package proxy
+package proxypool
 
 import (
 	"gpt-load/internal/models"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestProxyPoolKeepsKeyAffinityAndDistributesKeys(t *testing.T) {
-	manager := newProxyPoolManager()
+	manager := NewManager()
 	group := &models.Group{
 		ID: 1,
 		Config: datatypes.JSONMap{
@@ -44,7 +44,7 @@ func TestProxyPoolKeepsKeyAffinityAndDistributesKeys(t *testing.T) {
 }
 
 func TestProxyPoolFailureSwitchesProxy(t *testing.T) {
-	manager := newProxyPoolManager()
+	manager := NewManager()
 	group := &models.Group{
 		ID: 1,
 		Config: datatypes.JSONMap{
@@ -73,8 +73,49 @@ func TestProxyPoolFailureSwitchesProxy(t *testing.T) {
 	}
 }
 
+func TestProxyPoolOverridesGroupProxyURL(t *testing.T) {
+	manager := NewManager()
+	group := &models.Group{
+		ID: 1,
+		Config: datatypes.JSONMap{
+			"proxy_pool": map[string]any{
+				"proxies": []any{"http://127.0.0.1:1001"},
+			},
+		},
+	}
+	group.EffectiveConfig.ProxyURL = "http://127.0.0.1:7890"
+
+	selection, err := manager.Select(group, 1)
+	if err != nil {
+		t.Fatalf("select proxy: %v", err)
+	}
+	if !selection.FromPool {
+		t.Fatal("expected proxy_pool selection to be marked FromPool")
+	}
+	if selection.URL != "http://127.0.0.1:1001" {
+		t.Fatalf("expected proxy_pool URL, got %s", selection.URL)
+	}
+}
+
+func TestProxyPoolFallsBackToGroupProxyURLWhenPoolUnset(t *testing.T) {
+	manager := NewManager()
+	group := &models.Group{ID: 1}
+	group.EffectiveConfig.ProxyURL = "http://127.0.0.1:7890"
+
+	selection, err := manager.Select(group, 1)
+	if err != nil {
+		t.Fatalf("select fallback proxy: %v", err)
+	}
+	if selection.FromPool {
+		t.Fatal("expected fallback proxy_url selection not to be marked FromPool")
+	}
+	if selection.URL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected fallback proxy_url, got %s", selection.URL)
+	}
+}
+
 func TestProxyPoolCleansAffinity(t *testing.T) {
-	manager := newProxyPoolManager()
+	manager := NewManager()
 	manager.affinity["1:10"] = "http://127.0.0.1:1001"
 	manager.affinity["1:11"] = "http://127.0.0.1:1002"
 	manager.affinity["2:10"] = "http://127.0.0.1:1001"

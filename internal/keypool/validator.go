@@ -7,6 +7,9 @@ import (
 	"gpt-load/internal/config"
 	"gpt-load/internal/encryption"
 	"gpt-load/internal/models"
+	"gpt-load/internal/proxypool"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -28,6 +31,7 @@ type KeyValidator struct {
 	SettingsManager *config.SystemSettingsManager
 	keypoolProvider *KeyProvider
 	encryptionSvc   encryption.Service
+	proxyPool       *proxypool.Manager
 }
 
 type KeyValidatorParams struct {
@@ -37,6 +41,7 @@ type KeyValidatorParams struct {
 	SettingsManager *config.SystemSettingsManager
 	KeypoolProvider *KeyProvider
 	EncryptionSvc   encryption.Service
+	ProxyPool       *proxypool.Manager
 }
 
 // NewKeyValidator creates a new KeyValidator.
@@ -47,6 +52,7 @@ func NewKeyValidator(params KeyValidatorParams) *KeyValidator {
 		SettingsManager: params.SettingsManager,
 		keypoolProvider: params.KeypoolProvider,
 		encryptionSvc:   params.EncryptionSvc,
+		proxyPool:       params.ProxyPool,
 	}
 }
 
@@ -63,29 +69,87 @@ func (s *KeyValidator) ValidateSingleKey(key *models.APIKey, group *models.Group
 		return false, fmt.Errorf("failed to get channel for group %s: %w", group.Name, err)
 	}
 
-	isValid, validationErr := ch.ValidateKey(ctx, key, group)
+	var lastProxyErr error
+	for attempt := 0; attempt < proxyPoolValidationAttempts(group); attempt++ {
+		client := ch.GetHTTPClient()
+		proxySelection, proxyErr := s.proxyPool.Select(group, key.ID)
+		if proxyErr != nil {
+			return false, proxyErr
+		}
+		if proxySelection.FromPool {
+			client = s.channelFactory.GetClientForGroup(group, proxySelection.URL, false)
+		}
 
-	var errorMsg string
-	if !isValid && validationErr != nil {
-		errorMsg = validationErr.Error()
-	}
-	s.keypoolProvider.UpdateStatus(key, group, isValid, errorMsg)
+		isValid, validationErr := validateKeyWithClient(ctx, ch, key, group, client)
+		if validationErr == nil && proxySelection.FromPool {
+			s.proxyPool.MarkSuccess(group.ID, proxySelection.URL)
+		}
+		if validationErr != nil && proxySelection.FromPool && isValidationProxyError(validationErr) {
+			s.proxyPool.MarkFailure(group.ID, key.ID, proxySelection.URL, proxySelection.CooldownSeconds)
+			lastProxyErr = validationErr
+			continue
+		}
 
-	if !isValid {
+		var errorMsg string
+		if !isValid && validationErr != nil {
+			errorMsg = validationErr.Error()
+		}
+		s.keypoolProvider.UpdateStatus(key, group, isValid, errorMsg)
+
+		if !isValid {
+			logrus.WithFields(logrus.Fields{
+				"error":    validationErr,
+				"key_id":   key.ID,
+				"group_id": group.ID,
+			}).Debug("Key validation failed")
+			return false, validationErr
+		}
+
 		logrus.WithFields(logrus.Fields{
-			"error":    validationErr,
+			"key_id":   key.ID,
+			"is_valid": isValid,
+		}).Debug("Key validation successful")
+
+		return true, nil
+	}
+
+	if lastProxyErr != nil {
+		logrus.WithFields(logrus.Fields{
+			"error":    lastProxyErr,
 			"key_id":   key.ID,
 			"group_id": group.ID,
-		}).Debug("Key validation failed")
-		return false, validationErr
+		}).Debug("Key validation failed because all proxy pool entries failed")
+		return false, fmt.Errorf("all proxy pool entries failed validation: %w", lastProxyErr)
 	}
 
 	logrus.WithFields(logrus.Fields{
-		"key_id":   key.ID,
-		"is_valid": isValid,
+		"key_id": key.ID,
 	}).Debug("Key validation successful")
 
 	return true, nil
+}
+
+func validateKeyWithClient(ctx context.Context, ch channel.ChannelProxy, key *models.APIKey, group *models.Group, client *http.Client) (bool, error) {
+	if validator, ok := ch.(channel.ClientValidator); ok {
+		return validator.ValidateKeyWithClient(ctx, key, group, client)
+	}
+	return ch.ValidateKey(ctx, key, group)
+}
+
+func isValidationTransportError(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "failed to send validation request:")
+}
+
+func isValidationProxyError(err error) bool {
+	return isValidationTransportError(err) || proxypool.IsRecoverableErrorMessage(err.Error())
+}
+
+func proxyPoolValidationAttempts(group *models.Group) int {
+	groupConfig, err := models.DecodeGroupConfig(group.Config)
+	if err != nil || groupConfig.ProxyPool == nil || len(groupConfig.ProxyPool.Proxies) == 0 {
+		return 1
+	}
+	return len(groupConfig.ProxyPool.Proxies)
 }
 
 // TestMultipleKeys performs a synchronous validation for a list of key values within a specific group.

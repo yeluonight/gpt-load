@@ -71,9 +71,16 @@ func (ch *OpenAIResponseChannel) ExtractModel(c *gin.Context, bodyBytes []byte) 
 }
 
 func (ch *OpenAIResponseChannel) ValidateKey(ctx context.Context, apiKey *models.APIKey, group *models.Group) (bool, error) {
+	return ch.ValidateKeyWithClient(ctx, apiKey, group, ch.HTTPClient)
+}
+
+func (ch *OpenAIResponseChannel) ValidateKeyWithClient(ctx context.Context, apiKey *models.APIKey, group *models.Group, client *http.Client) (bool, error) {
 	upstreamURL := ch.getUpstreamURL()
 	if upstreamURL == nil {
 		return false, fmt.Errorf("no upstream URL configured for channel %s", ch.Name)
+	}
+	if client == nil {
+		client = ch.HTTPClient
 	}
 
 	endpointURL, err := url.Parse(ch.ValidationEndpoint)
@@ -107,7 +114,7 @@ func (ch *OpenAIResponseChannel) ValidateKey(ctx context.Context, apiKey *models
 		utils.ApplyHeaderRules(req, group.HeaderRuleList, headerCtx)
 	}
 
-	resp, err := ch.HTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("failed to send validation request: %w", err)
 	}

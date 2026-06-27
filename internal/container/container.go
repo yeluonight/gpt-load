@@ -11,6 +11,7 @@ import (
 	"gpt-load/internal/httpclient"
 	"gpt-load/internal/keypool"
 	"gpt-load/internal/proxy"
+	"gpt-load/internal/proxypool"
 	"gpt-load/internal/router"
 	"gpt-load/internal/services"
 	"gpt-load/internal/store"
@@ -45,6 +46,9 @@ func BuildContainer() (*dig.Container, error) {
 		return nil, err
 	}
 	if err := container.Provide(channel.NewFactory); err != nil {
+		return nil, err
+	}
+	if err := container.Provide(proxypool.NewManager); err != nil {
 		return nil, err
 	}
 

@@ -75,9 +75,16 @@ func (ch *AnthropicChannel) ExtractModel(c *gin.Context, bodyBytes []byte) strin
 
 // ValidateKey checks if the given API key is valid by making a messages request.
 func (ch *AnthropicChannel) ValidateKey(ctx context.Context, apiKey *models.APIKey, group *models.Group) (bool, error) {
+	return ch.ValidateKeyWithClient(ctx, apiKey, group, ch.HTTPClient)
+}
+
+func (ch *AnthropicChannel) ValidateKeyWithClient(ctx context.Context, apiKey *models.APIKey, group *models.Group, client *http.Client) (bool, error) {
 	upstreamURL := ch.getUpstreamURL()
 	if upstreamURL == nil {
 		return false, fmt.Errorf("no upstream URL configured for channel %s", ch.Name)
+	}
+	if client == nil {
+		client = ch.HTTPClient
 	}
 
 	// Parse validation endpoint to extract path and query parameters
@@ -119,7 +126,7 @@ func (ch *AnthropicChannel) ValidateKey(ctx context.Context, apiKey *models.APIK
 		utils.ApplyHeaderRules(req, group.HeaderRuleList, headerCtx)
 	}
 
-	resp, err := ch.HTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("failed to send validation request: %w", err)
 	}

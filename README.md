@@ -2,37 +2,23 @@
 
 English | [中文](README_CN.md) | [日本語](README_JP.md)
 
-[![Release](https://img.shields.io/github/v/release/tbphp/gpt-load)](https://github.com/tbphp/gpt-load/releases)
+[![Release](https://img.shields.io/github/v/release/yeluonight/gpt-load)](https://github.com/yeluonight/gpt-load/releases)
 ![Go Version](https://img.shields.io/badge/Go-1.24+-blue.svg)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A high-performance, enterprise-grade AI API transparent proxy service designed specifically for enterprises and developers who need to integrate multiple AI services. Built with Go, featuring intelligent key management, load balancing, and comprehensive monitoring capabilities, designed for high-concurrency production environments.
+This is the `yeluonight/gpt-load` fork, based on [tbphp/gpt-load](https://github.com/tbphp/gpt-load). It keeps the original transparent proxy, key pool, load balancing, WebUI, and deployment model, while adding stricter quota protection and group-level outbound proxy control for production use.
 
-For detailed documentation, please visit [Official Documentation](https://www.gpt-load.com/docs?lang=en)
+Compatibility: except for the Docker image path changing to `ghcr.io/yeluonight/gpt-load:latest`, the default `docker-compose.yml`, `.env` static configuration, and existing group configuration remain compatible. Fork additions are optional group-level settings and keep upstream behavior when unset.
 
-> This repository is a fork of [tbphp/gpt-load](https://github.com/tbphp/gpt-load). Except for the Docker image path changing to `ghcr.io/yeluonight/gpt-load:latest`, the default `docker-compose.yml`, `.env` static configuration, and existing group configuration remain compatible. Fork additions are optional group-level settings and keep upstream behavior when unset.
+## Fork Additions
 
-<a href="https://trendshift.io/repositories/14880" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14880" alt="tbphp%2Fgpt-load | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<a href="https://hellogithub.com/repository/tbphp/gpt-load" target="_blank"><img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=554dc4c46eb14092b9b0c56f1eb9021c&claim_uid=Qlh8vzrWJ0HCneG" alt="Featured｜HelloGitHub" style="width: 250px; height: 54px;" width="250" height="54" /></a>
-
-## Sponsors
-
-<table>
-<tbody>
-<tr>
-<td width="180"><a href="https://unity2.ai/register?source=gptload"><img src="./screenshot/unity2ai.jpg" alt="Unity2.ai" width="150"></a></td>
-<td>Thanks to Unity2.ai for sponsoring this project! Unity2.ai is a high-performance AI model API relay platform for individual developers, teams, and enterprises. It has long served leading enterprises in China, handles over 30 billion token calls per day, and supports 5000 RPM high concurrency. It supports balance billing, first top-up bonuses, bundled subscriptions, enterprise invoicing, and dedicated integration support. Register via <a href="https://unity2.ai/register?source=gptload">this link</a> to receive a $2 balance; join the official group for another $10 balance, up to $12 in free credits.</td>
-</tr>
-<tr>
-<td width="180"><a href="https://linux.do"><img src="./screenshot/l.png" alt="LINUX DO" width="150"></a></td>
-<td>Thank you very much for the support from the LINUX DO community!</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.digitalocean.com/?refcode=3d52cff21342&utm_campaign=Referral_Invite&utm_medium=Referral_Program&utm_source=badge"><img src="https://web-platforms.sfo2.cdn.digitaloceanspaces.com/WWW/Badge%202.svg" alt="DigitalOcean Referral Badge" width="150"></a></td>
-<td>This project is supported by DigitalOcean.</td>
-</tr>
-</tbody>
-</table>
+- **Per-key per-model protection**: RPM, TPM, and model reset-window request quotas can be configured by model, with `*` as a default model rule.
+- **Independent key total quota**: each key can have a separate total request limit per reset window, independent from per-model quotas.
+- **Pacific Time reset windows**: daily reset times are evaluated in PT (`America/Los_Angeles`); interval reset windows are also supported.
+- **Group proxy pool**: configure multiple outbound proxies directly on a group. The pool keeps key-to-proxy affinity where possible, spreads concurrent keys across proxy exits, and switches proxies on transport or unsupported-location errors.
+- **Proxy observability**: request logs include the actual outbound proxy used by each downstream request.
+- **Gemini model list fix**: Gemini groups map OpenAI-style `/v1/models` model-list requests to Gemini's official native `/v1beta/models?key=...` endpoint.
+- **GHCR image**: Docker images are published as `ghcr.io/yeluonight/gpt-load`.
 
 ## Features
 
@@ -163,8 +149,6 @@ Cluster deployment requires all nodes to connect to the same MySQL (or PostgreSQ
 - All nodes must configure identical `AUTH_KEY`, `DATABASE_DSN`, `REDIS_DSN`
 - Leader-follower architecture where follower nodes must configure environment variable: `IS_SLAVE=true`
 
-For details, please refer to [Cluster Deployment Documentation](https://www.gpt-load.com/docs/cluster?lang=en)
-
 ## Configuration System
 
 ### Configuration Architecture Overview
@@ -275,7 +259,7 @@ Supported Proxy Protocol Formats:
 | Max Idle Connections          | `max_idle_conns`          | 100     | ✅             | Connection pool maximum total idle connections                      |
 | Max Idle Connections Per Host | `max_idle_conns_per_host` | 50      | ✅             | Maximum idle connections per upstream host                          |
 | Proxy URL                     | `proxy_url`               | -       | ✅             | HTTP/HTTPS proxy for forwarding requests, uses environment if empty |
-| Group Proxy Pool              | `proxy_pool`              | -       | ✅             | Multiple HTTP/HTTPS proxies for the group; keeps key-to-proxy affinity where possible and temporarily switches when a proxy is unavailable |
+| Group Proxy Pool              | `proxy_pool`              | -       | ✅             | Multiple HTTP/HTTPS proxies for the group; when set it takes priority over `proxy_url`, otherwise normal `proxy_url` or environment proxy behavior is used |
 
 **Key Configuration:**
 
@@ -328,7 +312,7 @@ All fields below are optional group configuration fields. Existing configuration
 - `model_rate_limits`: `model` supports exact model names, and `*` acts as the default limit. `rpm` is requests per minute, `tpm` is tokens per minute. Enter TPM as a plain number, for example `250000`, not `250k`. `request_limit` limits how many times each key may call that model in one reset window.
 - `key_request_limit`: Limits each key's total request count, counted independently from `model_rate_limits[].request_limit`.
 - Reset policy: `reset_mode` supports `interval` and `daily`; `interval` uses `interval_minutes`, while `daily` uses `reset_time`. Time accepts `HH:MM` or `HH:MM:SS`. Daily reset times are evaluated in Pacific Time (PT, `America/Los_Angeles`).
-- `proxy_pool`: accepts an object, string array, or newline/comma-separated string. Unavailable proxies enter a temporary cooldown and requests switch to another available proxy.
+- `proxy_pool`: accepts an object, string array, or newline/comma-separated string. When configured, it takes priority over the normal `proxy_url` setting. Unavailable proxies enter a temporary cooldown and requests switch to another available proxy. Transport errors and upstream unsupported-location errors are treated as proxy failures, not key failures.
 
 ## Data Encryption Migration
 
@@ -584,6 +568,7 @@ curl -X POST http://localhost:3001/proxy/anthropic/v1/messages \
 
 - `/v1beta/models/*/generateContent` - Content generation
 - `/v1beta/models` - Model list
+- `/v1/models` - Model list compatibility path; this fork maps it to Gemini native `/v1beta/models?key=...`
 - And all other Gemini native interfaces
 
 **Anthropic Format:**
@@ -651,14 +636,8 @@ response = client.messages.create(
 
 ## Contributing
 
-Thanks to all the developers who have contributed to GPT-Load!
-
-[![Contributors](https://contrib.rocks/image?repo=tbphp/gpt-load)](https://github.com/tbphp/gpt-load/graphs/contributors)
+Issues and pull requests for this fork should be opened at [yeluonight/gpt-load](https://github.com/yeluonight/gpt-load). The original upstream project is [tbphp/gpt-load](https://github.com/tbphp/gpt-load).
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
-
-## Star History
-
-[![Stargazers over time](https://starchart.cc/tbphp/gpt-load.svg?variant=adaptive)](https://starchart.cc/tbphp/gpt-load)

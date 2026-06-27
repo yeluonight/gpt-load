@@ -165,6 +165,7 @@ export interface RequestLog {
   key_value?: string;
   model: string;
   upstream_addr: string;
+  outbound_proxy?: string;
   is_stream: boolean;
   request_body?: string;
 }

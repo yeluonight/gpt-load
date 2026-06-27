@@ -1,4 +1,4 @@
-package proxy
+package proxypool
 
 import (
 	"fmt"
@@ -8,36 +8,36 @@ import (
 	"time"
 )
 
-type proxySelection struct {
+type Selection struct {
 	URL             string
 	FromPool        bool
 	CooldownSeconds int
 }
 
-type proxyPoolManager struct {
+type Manager struct {
 	mu          sync.Mutex
 	affinity    map[string]string
 	unavailable map[string]time.Time
 }
 
-func newProxyPoolManager() *proxyPoolManager {
-	return &proxyPoolManager{
+func NewManager() *Manager {
+	return &Manager{
 		affinity:    make(map[string]string),
 		unavailable: make(map[string]time.Time),
 	}
 }
 
-func (m *proxyPoolManager) Select(group *models.Group, keyID uint) (proxySelection, error) {
+func (m *Manager) Select(group *models.Group, keyID uint) (Selection, error) {
 	if group == nil {
-		return proxySelection{}, fmt.Errorf("group is nil")
+		return Selection{}, fmt.Errorf("group is nil")
 	}
 
 	groupConfig, err := models.DecodeGroupConfig(group.Config)
 	if err != nil {
-		return proxySelection{}, fmt.Errorf("failed to decode group config: %w", err)
+		return Selection{}, fmt.Errorf("failed to decode group config: %w", err)
 	}
 	if groupConfig.ProxyPool == nil || len(groupConfig.ProxyPool.Proxies) == 0 {
-		return proxySelection{URL: group.EffectiveConfig.ProxyURL}, nil
+		return Selection{URL: group.EffectiveConfig.ProxyURL}, nil
 	}
 
 	cooldownSeconds := groupConfig.ProxyPool.CooldownSeconds
@@ -68,7 +68,7 @@ func (m *proxyPoolManager) Select(group *models.Group, keyID uint) (proxySelecti
 	}
 
 	if len(available) == 0 {
-		return proxySelection{}, fmt.Errorf("no available proxy in group proxy pool")
+		return Selection{}, fmt.Errorf("no available proxy in group proxy pool")
 	}
 
 	affinityKey := fmt.Sprintf("%d:%d", group.ID, keyID)
@@ -76,7 +76,7 @@ func (m *proxyPoolManager) Select(group *models.Group, keyID uint) (proxySelecti
 		if _, stillConfigured := currentProxySet[assigned]; !stillConfigured {
 			delete(m.affinity, affinityKey)
 		} else if isInStringSlice(available, assigned) {
-			return proxySelection{URL: assigned, FromPool: true, CooldownSeconds: cooldownSeconds}, nil
+			return Selection{URL: assigned, FromPool: true, CooldownSeconds: cooldownSeconds}, nil
 		}
 	}
 
@@ -101,10 +101,10 @@ func (m *proxyPoolManager) Select(group *models.Group, keyID uint) (proxySelecti
 	}
 	m.affinity[affinityKey] = selected
 
-	return proxySelection{URL: selected, FromPool: true, CooldownSeconds: cooldownSeconds}, nil
+	return Selection{URL: selected, FromPool: true, CooldownSeconds: cooldownSeconds}, nil
 }
 
-func (m *proxyPoolManager) MarkFailure(groupID, keyID uint, proxyURL string, cooldownSeconds int) {
+func (m *Manager) MarkFailure(groupID, keyID uint, proxyURL string, cooldownSeconds int) {
 	if strings.TrimSpace(proxyURL) == "" {
 		return
 	}
@@ -122,7 +122,7 @@ func (m *proxyPoolManager) MarkFailure(groupID, keyID uint, proxyURL string, coo
 	}
 }
 
-func (m *proxyPoolManager) MarkSuccess(groupID uint, proxyURL string) {
+func (m *Manager) MarkSuccess(groupID uint, proxyURL string) {
 	if strings.TrimSpace(proxyURL) == "" {
 		return
 	}
@@ -132,7 +132,7 @@ func (m *proxyPoolManager) MarkSuccess(groupID uint, proxyURL string) {
 	delete(m.unavailable, proxyStateKey(groupID, proxyURL))
 }
 
-func (m *proxyPoolManager) RemoveProxyAffinity(groupID uint, keyIDs []uint) {
+func (m *Manager) RemoveProxyAffinity(groupID uint, keyIDs []uint) {
 	if len(keyIDs) == 0 {
 		return
 	}
@@ -145,7 +145,7 @@ func (m *proxyPoolManager) RemoveProxyAffinity(groupID uint, keyIDs []uint) {
 	}
 }
 
-func (m *proxyPoolManager) ClearProxyAffinity(groupID uint) {
+func (m *Manager) ClearProxyAffinity(groupID uint) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

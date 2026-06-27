@@ -36,6 +36,39 @@ func newGeminiChannel(f *Factory, group *models.Group) (ChannelProxy, error) {
 	}, nil
 }
 
+// BuildUpstreamURL maps OpenAI-style model-list requests to Gemini's native
+// model list endpoint while preserving all other Gemini paths.
+func (ch *GeminiChannel) BuildUpstreamURL(originalURL *url.URL, groupName string) (string, error) {
+	requestPath := strings.TrimPrefix(originalURL.Path, "/proxy/"+groupName)
+	if requestPath == "/v1/models" {
+		base := ch.getUpstreamURL()
+		if base == nil {
+			return "", fmt.Errorf("no upstream URL configured for channel %s", ch.Name)
+		}
+
+		finalURL := *base
+		finalURL.Path = joinGeminiNativeModelListPath(finalURL.Path)
+		finalURL.RawQuery = originalURL.RawQuery
+		return finalURL.String(), nil
+	}
+
+	return ch.BaseChannel.BuildUpstreamURL(originalURL, groupName)
+}
+
+func joinGeminiNativeModelListPath(basePath string) string {
+	basePath = strings.TrimRight(basePath, "/")
+	if basePath == "" {
+		return "/v1beta/models"
+	}
+	if strings.HasSuffix(basePath, "/v1beta") {
+		return basePath + "/models"
+	}
+	if strings.HasSuffix(basePath, "/v1") {
+		return strings.TrimSuffix(basePath, "/v1") + "/v1beta/models"
+	}
+	return basePath + "/v1beta/models"
+}
+
 // ModifyRequest adds the API key as a query parameter for Gemini requests.
 func (ch *GeminiChannel) ModifyRequest(req *http.Request, apiKey *models.APIKey, group *models.Group) {
 	if strings.Contains(req.URL.Path, "v1beta/openai") {
@@ -98,9 +131,16 @@ func (ch *GeminiChannel) ExtractModel(c *gin.Context, bodyBytes []byte) string {
 
 // ValidateKey checks if the given API key is valid by making a generateContent request.
 func (ch *GeminiChannel) ValidateKey(ctx context.Context, apiKey *models.APIKey, group *models.Group) (bool, error) {
+	return ch.ValidateKeyWithClient(ctx, apiKey, group, ch.HTTPClient)
+}
+
+func (ch *GeminiChannel) ValidateKeyWithClient(ctx context.Context, apiKey *models.APIKey, group *models.Group, client *http.Client) (bool, error) {
 	upstreamURL := ch.getUpstreamURL()
 	if upstreamURL == nil {
 		return false, fmt.Errorf("no upstream URL configured for channel %s", ch.Name)
+	}
+	if client == nil {
+		client = ch.HTTPClient
 	}
 
 	// Safely join the path segments
@@ -137,7 +177,7 @@ func (ch *GeminiChannel) ValidateKey(ctx context.Context, apiKey *models.APIKey,
 		utils.ApplyHeaderRules(req, group.HeaderRuleList, headerCtx)
 	}
 
-	resp, err := ch.HTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("failed to send validation request: %w", err)
 	}

@@ -241,6 +241,7 @@ type RequestLog struct {
 	UserAgent       string    `gorm:"type:varchar(512)" json:"user_agent"`
 	RequestType     string    `gorm:"type:varchar(20);not null;default:'final';index" json:"request_type"`
 	UpstreamAddr    string    `gorm:"type:varchar(500)" json:"upstream_addr"`
+	OutboundProxy   string    `gorm:"type:varchar(500)" json:"outbound_proxy"`
 	IsStream        bool      `gorm:"not null" json:"is_stream"`
 	RequestBody     string    `gorm:"type:text" json:"request_body"`
 }
