@@ -329,6 +329,31 @@ export default {
     weightTooltip:
       "ロードバランシング重み設定。重みはトラフィック分配比率を決定し、値が高いほど多くのトラフィックを受信します。重み0はアップストリームを無効化（リクエストなし）。例：重み2:1は前者が約67%のトラフィックを受信",
     addUpstream: "アップストリーム追加",
+    usageLimits: "使用量制限",
+    usageLimitsTooltip:
+      "モデルごとに各キーのRPM/TPMを制限し、必要に応じてリセット期間ごとのリクエスト数を制限します。制限に達したキーはスキップされ、同じグループ内の他のキーが試行されます。",
+    modelLimit: "モデル制限",
+    modelLimitTooltip:
+      "正確なモデル名を指定します。* はデフォルト制限として使用できます。RPM/TPMが空または0の場合は無制限です。",
+    addModelLimit: "モデル制限を追加",
+    modelRateLimitInvalid: "モデル制限にはモデル名とRPMまたはTPMの少なくとも一方が必要です",
+    keyRequestLimit: "キーリクエスト数",
+    keyRequestLimitTooltip:
+      "1つのリセット期間内で各キーが送信できる上流リクエスト数の上限です。空または0は無制限です。",
+    maxRequests: "最大リクエスト数",
+    resetDaily: "毎日指定時刻",
+    resetByInterval: "周期でリセット",
+    intervalMinutes: "周期（分）",
+    keyRequestLimitInvalid:
+      "キーリクエスト制限が無効です。リセット周期または時刻を確認してください。",
+    proxyPool: "プロキシプール",
+    proxyPoolTooltip:
+      "このグループに複数の送信プロキシを設定します。可能な限り同じキーを同じプロキシに固定し、同時実行時はキーを複数プロキシへ分散します。",
+    proxyPoolInputTooltip:
+      "1行に1つのプロキシURLを入力します。カンマ区切りにも対応します。空の場合は通常のプロキシ設定を使用します。",
+    proxyCooldown: "プロキシ冷却秒数",
+    proxyCooldownTooltip:
+      "転送エラー後にそのプロキシを一時的にスキップする時間です。0の場合は既定の60秒を使用します。",
     groupConfig: "グループ設定",
     groupConfigTooltip:
       "タイムアウト、リトライ回数などのグループ固有の設定パラメーター。これらの設定はグローバルデフォルトを上書きします",

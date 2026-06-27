@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"gpt-load/internal/channel"
 	app_errors "gpt-load/internal/errors"
 	"gpt-load/internal/models"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 )
 
@@ -60,4 +64,81 @@ func handleGzipCompression(resp *http.Response, bodyBytes []byte) []byte {
 		return decompressedBody
 	}
 	return bodyBytes
+}
+
+func extractModelForRequest(req *http.Request, c *gin.Context, channelHandler channel.ChannelProxy, bodyBytes []byte) string {
+	if len(bodyBytes) > 0 {
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(bodyBytes, &payload); err == nil && strings.TrimSpace(payload.Model) != "" {
+			return strings.TrimSpace(payload.Model)
+		}
+	}
+
+	if req != nil && req.URL != nil {
+		parts := strings.Split(req.URL.Path, "/")
+		for i, part := range parts {
+			if part == "models" && i+1 < len(parts) {
+				return strings.Split(parts[i+1], ":")[0]
+			}
+		}
+	}
+
+	if c != nil && channelHandler != nil {
+		return strings.TrimSpace(channelHandler.ExtractModel(c, bodyBytes))
+	}
+	return ""
+}
+
+func estimateRequestTokens(bodyBytes []byte) int64 {
+	if len(bodyBytes) == 0 {
+		return 1
+	}
+
+	estimated := int64((len(bodyBytes) + 3) / 4)
+	var payload map[string]any
+	if err := json.Unmarshal(bodyBytes, &payload); err == nil {
+		estimated += numericTokenField(payload, "max_tokens")
+		estimated += numericTokenField(payload, "max_completion_tokens")
+		estimated += numericTokenField(payload, "max_output_tokens")
+	}
+
+	if estimated < 1 {
+		return 1
+	}
+	return estimated
+}
+
+func numericTokenField(payload map[string]any, field string) int64 {
+	value, exists := payload[field]
+	if !exists {
+		return 0
+	}
+
+	switch v := value.(type) {
+	case float64:
+		if v > 0 {
+			return int64(v)
+		}
+	case int:
+		if v > 0 {
+			return int64(v)
+		}
+	case int64:
+		if v > 0 {
+			return v
+		}
+	case json.Number:
+		n, err := v.Int64()
+		if err == nil && n > 0 {
+			return n
+		}
+	case string:
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
 }

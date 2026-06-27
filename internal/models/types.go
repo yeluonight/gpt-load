@@ -1,8 +1,10 @@
 package models
 
 import (
+	"encoding/json"
 	"gpt-load/internal/failover"
 	"gpt-load/internal/types"
+	"strings"
 	"time"
 
 	"gorm.io/datatypes"
@@ -26,20 +28,102 @@ type SystemSetting struct {
 
 // GroupConfig 存储特定于分组的配置
 type GroupConfig struct {
-	RequestTimeout               *int    `json:"request_timeout,omitempty"`
-	IdleConnTimeout              *int    `json:"idle_conn_timeout,omitempty"`
-	ConnectTimeout               *int    `json:"connect_timeout,omitempty"`
-	MaxIdleConns                 *int    `json:"max_idle_conns,omitempty"`
-	MaxIdleConnsPerHost          *int    `json:"max_idle_conns_per_host,omitempty"`
-	ResponseHeaderTimeout        *int    `json:"response_header_timeout,omitempty"`
-	ProxyURL                     *string `json:"proxy_url,omitempty"`
-	MaxRetries                   *int    `json:"max_retries,omitempty"`
-	BlacklistThreshold           *int    `json:"blacklist_threshold,omitempty"`
-	FailoverStatusCodes          *string `json:"failover_status_codes,omitempty"`
-	KeyValidationIntervalMinutes *int    `json:"key_validation_interval_minutes,omitempty"`
-	KeyValidationConcurrency     *int    `json:"key_validation_concurrency,omitempty"`
-	KeyValidationTimeoutSeconds  *int    `json:"key_validation_timeout_seconds,omitempty"`
-	EnableRequestBodyLogging     *bool   `json:"enable_request_body_logging,omitempty"`
+	RequestTimeout               *int                   `json:"request_timeout,omitempty"`
+	IdleConnTimeout              *int                   `json:"idle_conn_timeout,omitempty"`
+	ConnectTimeout               *int                   `json:"connect_timeout,omitempty"`
+	MaxIdleConns                 *int                   `json:"max_idle_conns,omitempty"`
+	MaxIdleConnsPerHost          *int                   `json:"max_idle_conns_per_host,omitempty"`
+	ResponseHeaderTimeout        *int                   `json:"response_header_timeout,omitempty"`
+	ProxyURL                     *string                `json:"proxy_url,omitempty"`
+	MaxRetries                   *int                   `json:"max_retries,omitempty"`
+	BlacklistThreshold           *int                   `json:"blacklist_threshold,omitempty"`
+	FailoverStatusCodes          *string                `json:"failover_status_codes,omitempty"`
+	KeyValidationIntervalMinutes *int                   `json:"key_validation_interval_minutes,omitempty"`
+	KeyValidationConcurrency     *int                   `json:"key_validation_concurrency,omitempty"`
+	KeyValidationTimeoutSeconds  *int                   `json:"key_validation_timeout_seconds,omitempty"`
+	EnableRequestBodyLogging     *bool                  `json:"enable_request_body_logging,omitempty"`
+	ModelRateLimits              []ModelRateLimitConfig `json:"model_rate_limits,omitempty"`
+	KeyRequestLimit              *KeyRequestLimitConfig `json:"key_request_limit,omitempty"`
+	ProxyPool                    *ProxyPoolConfig       `json:"proxy_pool,omitempty"`
+}
+
+// ModelRateLimitConfig defines per-key limits for a specific model.
+type ModelRateLimitConfig struct {
+	Model string `json:"model"`
+	RPM   int64  `json:"rpm,omitempty"`
+	TPM   int64  `json:"tpm,omitempty"`
+}
+
+// KeyRequestLimitConfig defines per-key request quota and reset policy.
+type KeyRequestLimitConfig struct {
+	MaxRequests     int64  `json:"max_requests,omitempty"`
+	ResetMode       string `json:"reset_mode,omitempty"`       // "interval" or "daily"
+	IntervalMinutes int    `json:"interval_minutes,omitempty"` // Used when reset_mode is "interval"
+	ResetTime       string `json:"reset_time,omitempty"`       // HH:MM or HH:MM:SS, used when reset_mode is "daily"
+}
+
+// ProxyPoolConfig defines a group-level outbound proxy pool.
+type ProxyPoolConfig struct {
+	Proxies         []string `json:"proxies,omitempty"`
+	CooldownSeconds int      `json:"cooldown_seconds,omitempty"`
+}
+
+// UnmarshalJSON allows proxy_pool to be configured as an object, string array,
+// or newline/comma separated string.
+func (c *ProxyPoolConfig) UnmarshalJSON(data []byte) error {
+	type alias ProxyPoolConfig
+	var obj alias
+	if err := json.Unmarshal(data, &obj); err == nil && (len(obj.Proxies) > 0 || obj.CooldownSeconds > 0) {
+		*c = ProxyPoolConfig(obj)
+		return nil
+	}
+
+	var list []string
+	if err := json.Unmarshal(data, &list); err == nil {
+		c.Proxies = list
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		c.Proxies = splitProxyText(text)
+		return nil
+	}
+
+	return json.Unmarshal(data, (*alias)(c))
+}
+
+func splitProxyText(text string) []string {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == ','
+	})
+	proxies := make([]string, 0, len(fields))
+	for _, field := range fields {
+		trimmed := strings.TrimSpace(field)
+		if trimmed != "" {
+			proxies = append(proxies, trimmed)
+		}
+	}
+	return proxies
+}
+
+// DecodeGroupConfig decodes a JSONMap into the typed group config.
+func DecodeGroupConfig(config datatypes.JSONMap) (GroupConfig, error) {
+	if config == nil {
+		return GroupConfig{}, nil
+	}
+
+	configBytes, err := config.MarshalJSON()
+	if err != nil {
+		return GroupConfig{}, err
+	}
+
+	var groupConfig GroupConfig
+	if err := json.Unmarshal(configBytes, &groupConfig); err != nil {
+		return GroupConfig{}, err
+	}
+
+	return groupConfig, nil
 }
 
 // HeaderRule defines a single rule for header manipulation.

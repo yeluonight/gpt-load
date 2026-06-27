@@ -321,6 +321,27 @@ export default {
     weightTooltip:
       "负载均衡权重配置。权重决定流量分配比例，数值越大获得的流量越多。权重为0时禁用该上游（不接收任何请求）。示例：权重2:1表示前者获得约67%的流量",
     addUpstream: "添加上游地址",
+    usageLimits: "用量限制",
+    usageLimitsTooltip:
+      "按模型限制每个 Key 的 RPM/TPM，并可设置每个 Key 的周期调用次数上限。达到限制的 Key 会被跳过，优先尝试同组其他 Key。",
+    modelLimit: "模型限制",
+    modelLimitTooltip: "模型名支持精确匹配，填写 * 可作为默认限制。RPM/TPM 留空或 0 表示不限制。",
+    addModelLimit: "添加模型限制",
+    modelRateLimitInvalid: "模型限制需要填写模型名，并至少设置 RPM 或 TPM",
+    keyRequestLimit: "Key 调用次数",
+    keyRequestLimitTooltip:
+      "限制每个 Key 在一个刷新窗口内最多可发起的上游请求数。0 或留空表示不限制。",
+    maxRequests: "最大请求数",
+    resetDaily: "每天固定时间",
+    resetByInterval: "按周期刷新",
+    intervalMinutes: "周期分钟",
+    keyRequestLimitInvalid: "Key 调用次数限制配置不正确，请检查刷新周期或时间点",
+    proxyPool: "代理池",
+    proxyPoolTooltip:
+      "为此分组配置多个出站代理。系统会尽量让同一个 Key 固定使用同一个代理，并在多个 Key 并发时分散出口。",
+    proxyPoolInputTooltip: "每行一个代理 URL，也支持逗号分隔。留空则使用普通代理配置。",
+    proxyCooldown: "代理冷却秒数",
+    proxyCooldownTooltip: "某代理出现传输错误后临时跳过的时间，0 表示使用默认值 60 秒。",
     groupConfig: "分组配置",
     groupConfigTooltip:
       "针对此分组的专用配置参数，如超时时间、重试次数等。这些配置会覆盖全局默认设置",

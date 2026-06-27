@@ -39,6 +39,19 @@ interface ConfigItem {
   value: number | string | boolean;
 }
 
+interface ModelRateLimitItem {
+  model: string;
+  rpm: number | null;
+  tpm: number | null;
+}
+
+interface KeyRequestLimitForm {
+  max_requests: number | null;
+  reset_mode: "interval" | "daily";
+  interval_minutes: number | null;
+  reset_time: string;
+}
+
 // Header规则类型
 interface HeaderRuleItem {
   key: string;
@@ -74,8 +87,12 @@ interface GroupFormData {
   param_overrides: string;
   model_redirect_rules: string;
   model_redirect_strict: boolean;
-  config: Record<string, number | string | boolean>;
+  config: Record<string, unknown>;
   configItems: ConfigItem[];
+  model_rate_limits: ModelRateLimitItem[];
+  key_request_limit: KeyRequestLimitForm;
+  proxy_pool: string;
+  proxy_pool_cooldown_seconds: number;
   header_rules: HeaderRuleItem[];
   proxy_keys: string;
   group_type?: string;
@@ -101,6 +118,15 @@ const formData = reactive<GroupFormData>({
   model_redirect_strict: false,
   config: {},
   configItems: [] as ConfigItem[],
+  model_rate_limits: [] as ModelRateLimitItem[],
+  key_request_limit: {
+    max_requests: null,
+    reset_mode: "daily",
+    interval_minutes: 1440,
+    reset_time: "00:00",
+  },
+  proxy_pool: "",
+  proxy_pool_cooldown_seconds: 60,
   header_rules: [] as HeaderRuleItem[],
   proxy_keys: "",
   group_type: "standard",
@@ -160,6 +186,11 @@ const validationEndpointPlaceholder = computed(() => {
       return t("keys.enterValidationPath");
   }
 });
+
+const resetModeOptions = computed(() => [
+  { label: t("keys.resetDaily"), value: "daily" },
+  { label: t("keys.resetByInterval"), value: "interval" },
+]);
 
 // 表单验证规则
 const rules: FormRules = {
@@ -302,6 +333,15 @@ function resetForm() {
     model_redirect_strict: false,
     config: {},
     configItems: [],
+    model_rate_limits: [],
+    key_request_limit: {
+      max_requests: null,
+      reset_mode: "daily",
+      interval_minutes: 1440,
+      reset_time: "00:00",
+    },
+    proxy_pool: "",
+    proxy_pool_cooldown_seconds: 60,
     header_rules: [],
     proxy_keys: "",
     group_type: "standard",
@@ -322,12 +362,22 @@ function loadGroupData() {
     return;
   }
 
-  const configItems = Object.entries(props.group.config || {}).map(([key, value]) => {
+  const rawConfig = props.group.config || {};
+  const {
+    model_rate_limits: modelRateLimits,
+    key_request_limit: keyRequestLimit,
+    proxy_pool: proxyPool,
+    ...standardConfig
+  } = rawConfig;
+  const configItems = Object.entries(standardConfig || {}).map(([key, value]) => {
     return {
       key,
-      value,
+      value: value as number | string | boolean,
     };
   });
+
+  const normalizedKeyRequestLimit = normalizeKeyRequestLimit(keyRequestLimit);
+  const normalizedProxyPool = normalizeProxyPool(proxyPool);
   Object.assign(formData, {
     name: props.group.name || "",
     display_name: props.group.display_name || "",
@@ -344,6 +394,10 @@ function loadGroupData() {
     model_redirect_strict: props.group.model_redirect_strict || false,
     config: {},
     configItems,
+    model_rate_limits: normalizeModelRateLimits(modelRateLimits),
+    key_request_limit: normalizedKeyRequestLimit,
+    proxy_pool: normalizedProxyPool.proxies.join("\n"),
+    proxy_pool_cooldown_seconds: normalizedProxyPool.cooldown_seconds,
     header_rules: (props.group.header_rules || []).map((rule: HeaderRuleItem) => ({
       key: rule.key || "",
       value: rule.value || "",
@@ -398,6 +452,110 @@ function addConfigItem() {
 // 删除配置项
 function removeConfigItem(index: number) {
   formData.configItems.splice(index, 1);
+}
+
+function normalizeModelRateLimits(value: unknown): ModelRateLimitItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter(item => item && typeof item === "object")
+    .map(item => {
+      const record = item as Record<string, unknown>;
+      return {
+        model: String(record.model || ""),
+        rpm: typeof record.rpm === "number" ? record.rpm : null,
+        tpm: typeof record.tpm === "number" ? record.tpm : null,
+      };
+    });
+}
+
+function normalizeKeyRequestLimit(value: unknown): KeyRequestLimitForm {
+  const defaults: KeyRequestLimitForm = {
+    max_requests: null,
+    reset_mode: "daily",
+    interval_minutes: 1440,
+    reset_time: "00:00",
+  };
+  if (!value || typeof value !== "object") {
+    return defaults;
+  }
+  const record = value as Record<string, unknown>;
+  const resetMode = record.reset_mode === "interval" ? "interval" : "daily";
+  return {
+    max_requests: typeof record.max_requests === "number" ? record.max_requests : null,
+    reset_mode: resetMode,
+    interval_minutes:
+      typeof record.interval_minutes === "number"
+        ? record.interval_minutes
+        : defaults.interval_minutes,
+    reset_time: typeof record.reset_time === "string" ? record.reset_time : defaults.reset_time,
+  };
+}
+
+function normalizeProxyPool(value: unknown): { proxies: string[]; cooldown_seconds: number } {
+  if (!value) {
+    return { proxies: [], cooldown_seconds: 60 };
+  }
+  if (typeof value === "string") {
+    return { proxies: splitProxyText(value), cooldown_seconds: 60 };
+  }
+  if (Array.isArray(value)) {
+    return { proxies: value.map(item => String(item)).filter(Boolean), cooldown_seconds: 60 };
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const proxies = Array.isArray(record.proxies)
+      ? record.proxies.map(item => String(item)).filter(Boolean)
+      : [];
+    return {
+      proxies,
+      cooldown_seconds: typeof record.cooldown_seconds === "number" ? record.cooldown_seconds : 60,
+    };
+  }
+  return { proxies: [], cooldown_seconds: 60 };
+}
+
+function splitProxyText(value: string): string[] {
+  return value
+    .split(/[\n\r,]+/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeDailyResetTime(value: string): string | null {
+  const parts = value.trim().split(":");
+  if (parts.length !== 2 && parts.length !== 3) {
+    return null;
+  }
+  const hour = Number(parts[0]);
+  const minute = Number(parts[1]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    return null;
+  }
+  if (!/^\d{2}$/.test(parts[1]) || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+    return null;
+  }
+  if (parts.length === 2) {
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+  const second = Number(parts[2]);
+  if (!/^\d{2}$/.test(parts[2]) || !Number.isInteger(second) || second < 0 || second > 59) {
+    return null;
+  }
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
+}
+
+function addModelRateLimit() {
+  formData.model_rate_limits.push({
+    model: "",
+    rpm: null,
+    tpm: null,
+  });
+}
+
+function removeModelRateLimit(index: number) {
+  formData.model_rate_limits.splice(index, 1);
 }
 
 // 添加Header规则
@@ -504,7 +662,7 @@ async function handleSubmit() {
     }
 
     // 将configItems转换为config对象
-    const config: Record<string, number | string | boolean> = {};
+    const config: Record<string, unknown> = {};
     formData.configItems.forEach((item: ConfigItem) => {
       if (item.key && item.key.trim()) {
         const option = configOptions.value.find(opt => opt.key === item.key);
@@ -516,6 +674,56 @@ async function handleSubmit() {
         }
       }
     });
+
+    const modelRateLimits = formData.model_rate_limits
+      .map(item => ({
+        model: item.model.trim(),
+        rpm: Number(item.rpm || 0),
+        tpm: Number(item.tpm || 0),
+      }))
+      .filter(item => item.model || item.rpm > 0 || item.tpm > 0);
+    for (const item of modelRateLimits) {
+      if (!item.model || (item.rpm <= 0 && item.tpm <= 0)) {
+        message.error(t("keys.modelRateLimitInvalid"));
+        return;
+      }
+    }
+    if (modelRateLimits.length > 0) {
+      config.model_rate_limits = modelRateLimits;
+    }
+
+    if (formData.key_request_limit.max_requests && formData.key_request_limit.max_requests > 0) {
+      const keyRequestLimit: Record<string, unknown> = {
+        max_requests: formData.key_request_limit.max_requests,
+        reset_mode: formData.key_request_limit.reset_mode,
+      };
+      if (formData.key_request_limit.reset_mode === "interval") {
+        if (
+          !formData.key_request_limit.interval_minutes ||
+          formData.key_request_limit.interval_minutes <= 0
+        ) {
+          message.error(t("keys.keyRequestLimitInvalid"));
+          return;
+        }
+        keyRequestLimit.interval_minutes = formData.key_request_limit.interval_minutes;
+      } else {
+        const resetTime = normalizeDailyResetTime(formData.key_request_limit.reset_time);
+        if (!resetTime) {
+          message.error(t("keys.keyRequestLimitInvalid"));
+          return;
+        }
+        keyRequestLimit.reset_time = resetTime;
+      }
+      config.key_request_limit = keyRequestLimit;
+    }
+
+    const proxies = splitProxyText(formData.proxy_pool);
+    if (proxies.length > 0) {
+      config.proxy_pool = {
+        proxies,
+        cooldown_seconds: formData.proxy_pool_cooldown_seconds || 60,
+      };
+    }
 
     // 构建提交数据
     const submitData = {
@@ -851,6 +1059,176 @@ async function handleSubmit() {
           <n-collapse>
             <n-collapse-item name="advanced">
               <template #header>{{ t("keys.advancedConfig") }}</template>
+              <div class="config-section">
+                <h5 class="config-title-with-tooltip">
+                  {{ t("keys.usageLimits") }}
+                  <n-tooltip trigger="hover" placement="top">
+                    <template #trigger>
+                      <n-icon :component="HelpCircleOutline" class="help-icon config-help" />
+                    </template>
+                    {{ t("keys.usageLimitsTooltip") }}
+                  </n-tooltip>
+                </h5>
+
+                <div class="rate-limit-items">
+                  <n-form-item
+                    v-for="(limit, index) in formData.model_rate_limits"
+                    :key="index"
+                    class="rate-limit-row"
+                    :label="`${t('keys.modelLimit')} ${index + 1}`"
+                  >
+                    <template #label>
+                      <div class="form-label-with-tooltip">
+                        {{ t("keys.modelLimit") }} {{ index + 1 }}
+                        <n-tooltip trigger="hover" placement="top">
+                          <template #trigger>
+                            <n-icon :component="HelpCircleOutline" class="help-icon" />
+                          </template>
+                          {{ t("keys.modelLimitTooltip") }}
+                        </n-tooltip>
+                      </div>
+                    </template>
+                    <div class="rate-limit-content">
+                      <div class="rate-limit-model">
+                        <n-input v-model:value="limit.model" placeholder="gpt-4.1, *" />
+                      </div>
+                      <div class="rate-limit-number">
+                        <n-input-number
+                          v-model:value="limit.rpm"
+                          :min="0"
+                          :precision="0"
+                          placeholder="RPM"
+                          style="width: 100%"
+                        />
+                      </div>
+                      <div class="rate-limit-number">
+                        <n-input-number
+                          v-model:value="limit.tpm"
+                          :min="0"
+                          :precision="0"
+                          placeholder="TPM"
+                          style="width: 100%"
+                        />
+                      </div>
+                      <div class="config-actions">
+                        <n-button
+                          @click="removeModelRateLimit(index)"
+                          type="error"
+                          quaternary
+                          circle
+                          size="small"
+                        >
+                          <template #icon>
+                            <n-icon :component="Remove" />
+                          </template>
+                        </n-button>
+                      </div>
+                    </div>
+                  </n-form-item>
+                </div>
+
+                <div style="margin-top: 12px; padding-left: 120px">
+                  <n-button @click="addModelRateLimit" dashed style="width: 100%">
+                    <template #icon>
+                      <n-icon :component="Add" />
+                    </template>
+                    {{ t("keys.addModelLimit") }}
+                  </n-button>
+                </div>
+
+                <n-form-item style="margin-top: 16px" path="key_request_limit">
+                  <template #label>
+                    <div class="form-label-with-tooltip">
+                      {{ t("keys.keyRequestLimit") }}
+                      <n-tooltip trigger="hover" placement="top">
+                        <template #trigger>
+                          <n-icon :component="HelpCircleOutline" class="help-icon config-help" />
+                        </template>
+                        {{ t("keys.keyRequestLimitTooltip") }}
+                      </n-tooltip>
+                    </div>
+                  </template>
+                  <div class="key-request-limit-content">
+                    <n-input-number
+                      v-model:value="formData.key_request_limit.max_requests"
+                      :min="0"
+                      :precision="0"
+                      :placeholder="t('keys.maxRequests')"
+                      style="width: 100%"
+                    />
+                    <n-select
+                      v-model:value="formData.key_request_limit.reset_mode"
+                      :options="resetModeOptions"
+                    />
+                    <n-input-number
+                      v-if="formData.key_request_limit.reset_mode === 'interval'"
+                      v-model:value="formData.key_request_limit.interval_minutes"
+                      :min="1"
+                      :precision="0"
+                      :placeholder="t('keys.intervalMinutes')"
+                      style="width: 100%"
+                    />
+                    <n-input
+                      v-else
+                      v-model:value="formData.key_request_limit.reset_time"
+                      placeholder="00:00"
+                    />
+                  </div>
+                </n-form-item>
+              </div>
+
+              <div class="config-section">
+                <h5 class="config-title-with-tooltip">
+                  {{ t("keys.proxyPool") }}
+                  <n-tooltip trigger="hover" placement="top">
+                    <template #trigger>
+                      <n-icon :component="HelpCircleOutline" class="help-icon config-help" />
+                    </template>
+                    {{ t("keys.proxyPoolTooltip") }}
+                  </n-tooltip>
+                </h5>
+
+                <n-form-item path="proxy_pool">
+                  <template #label>
+                    <div class="form-label-with-tooltip">
+                      {{ t("keys.proxyPool") }}
+                      <n-tooltip trigger="hover" placement="top">
+                        <template #trigger>
+                          <n-icon :component="HelpCircleOutline" class="help-icon config-help" />
+                        </template>
+                        {{ t("keys.proxyPoolInputTooltip") }}
+                      </n-tooltip>
+                    </div>
+                  </template>
+                  <n-input
+                    v-model:value="formData.proxy_pool"
+                    type="textarea"
+                    placeholder="http://127.0.0.1:7890"
+                    :rows="4"
+                  />
+                </n-form-item>
+
+                <n-form-item path="proxy_pool_cooldown_seconds">
+                  <template #label>
+                    <div class="form-label-with-tooltip">
+                      {{ t("keys.proxyCooldown") }}
+                      <n-tooltip trigger="hover" placement="top">
+                        <template #trigger>
+                          <n-icon :component="HelpCircleOutline" class="help-icon config-help" />
+                        </template>
+                        {{ t("keys.proxyCooldownTooltip") }}
+                      </n-tooltip>
+                    </div>
+                  </template>
+                  <n-input-number
+                    v-model:value="formData.proxy_pool_cooldown_seconds"
+                    :min="0"
+                    :precision="0"
+                    style="width: 100%"
+                  />
+                </n-form-item>
+              </div>
+
               <div class="config-section">
                 <h5 class="config-title-with-tooltip">
                   {{ t("keys.groupConfig") }}
@@ -1442,6 +1820,32 @@ async function handleSubmit() {
   justify-content: center;
 }
 
+.rate-limit-row {
+  margin-bottom: 12px;
+}
+
+.rate-limit-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.rate-limit-model {
+  flex: 1;
+}
+
+.rate-limit-number {
+  flex: 0 0 120px;
+}
+
+.key-request-limit-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+}
+
 @media (max-width: 768px) {
   .group-form-card {
     width: 100vw !important;
@@ -1465,7 +1869,8 @@ async function handleSubmit() {
   }
 
   .upstream-row,
-  .config-item-content {
+  .config-item-content,
+  .rate-limit-content {
     flex-direction: column;
     gap: 8px;
     align-items: stretch;
@@ -1479,6 +1884,14 @@ async function handleSubmit() {
 
   .config-value {
     flex: 1;
+  }
+
+  .rate-limit-number {
+    flex: 1;
+  }
+
+  .key-request-limit-content {
+    grid-template-columns: 1fr;
   }
 
   .upstream-actions,

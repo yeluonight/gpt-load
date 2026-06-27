@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -79,6 +80,62 @@ func (s *RedisStore) Exists(key string) (bool, error) {
 // SetNX sets a key-value pair in Redis if the key does not already exist.
 func (s *RedisStore) SetNX(key string, value []byte, ttl time.Duration) (bool, error) {
 	return s.client.SetNX(context.Background(), s.prefixKey(key), value, ttl).Result()
+}
+
+// IncrBy increments a numeric key by incr.
+func (s *RedisStore) IncrBy(key string, incr int64) (int64, error) {
+	return s.client.IncrBy(context.Background(), s.prefixKey(key), incr).Result()
+}
+
+var tryIncrByWithTTLScript = redis.NewScript(`
+local current = redis.call("GET", KEYS[1])
+local current_num = 0
+if current then
+  current_num = tonumber(current)
+end
+local incr = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local ttl_ms = tonumber(ARGV[3])
+local next_num = current_num + incr
+if limit > 0 and next_num > limit then
+  return {0, current_num}
+end
+local result = redis.call("INCRBY", KEYS[1], incr)
+if ttl_ms > 0 and redis.call("PTTL", KEYS[1]) < 0 then
+  redis.call("PEXPIRE", KEYS[1], ttl_ms)
+end
+return {1, result}
+`)
+
+// TryIncrByWithTTL increments a numeric key if the result would not exceed limit.
+func (s *RedisStore) TryIncrByWithTTL(key string, incr, limit int64, ttl time.Duration) (int64, bool, error) {
+	result, err := tryIncrByWithTTLScript.Run(
+		context.Background(),
+		s.client,
+		[]string{s.prefixKey(key)},
+		incr,
+		limit,
+		ttl.Milliseconds(),
+	).Result()
+	if err != nil {
+		return 0, false, err
+	}
+
+	values, ok := result.([]any)
+	if !ok || len(values) != 2 {
+		return 0, false, fmt.Errorf("unexpected redis script response for key %s: %v", key, result)
+	}
+
+	allowedInt, err := strconv.ParseInt(fmt.Sprint(values[0]), 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to parse redis allowed flag for key %s: %w", key, err)
+	}
+	current, err := strconv.ParseInt(fmt.Sprint(values[1]), 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to parse redis counter value for key %s: %w", key, err)
+	}
+
+	return current, allowedInt == 1, nil
 }
 
 // Close closes the Redis client connection.

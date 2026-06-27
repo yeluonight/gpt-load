@@ -40,6 +40,13 @@ type Store interface {
 	// SetNX sets a key-value pair if the key does not already exist.
 	SetNX(key string, value []byte, ttl time.Duration) (bool, error)
 
+	// IncrBy increments a numeric key by incr.
+	IncrBy(key string, incr int64) (int64, error)
+
+	// TryIncrByWithTTL atomically increments a numeric key with TTL when the
+	// increment would not exceed limit.
+	TryIncrByWithTTL(key string, incr, limit int64, ttl time.Duration) (int64, bool, error)
+
 	// HASH operations
 	HSet(key string, values map[string]any) error
 	HGetAll(key string) (map[string]string, error)

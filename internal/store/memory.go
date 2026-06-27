@@ -146,6 +146,74 @@ func (s *MemoryStore) SetNX(key string, value []byte, ttl time.Duration) (bool, 
 	return true, nil
 }
 
+// IncrBy increments a numeric key by incr.
+func (s *MemoryStore) IncrBy(key string, incr int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, expiresAt, err := s.getCounterLocked(key)
+	if err != nil {
+		return 0, err
+	}
+
+	newVal := current + incr
+	s.data[key] = memoryStoreItem{
+		value:     []byte(strconv.FormatInt(newVal, 10)),
+		expiresAt: expiresAt,
+	}
+	return newVal, nil
+}
+
+// TryIncrByWithTTL increments a numeric key if the result would not exceed limit.
+func (s *MemoryStore) TryIncrByWithTTL(key string, incr, limit int64, ttl time.Duration) (int64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, expiresAt, err := s.getCounterLocked(key)
+	if err != nil {
+		return 0, false, err
+	}
+
+	newVal := current + incr
+	if limit > 0 && newVal > limit {
+		return current, false, nil
+	}
+
+	if expiresAt == 0 && ttl > 0 {
+		expiresAt = time.Now().UnixNano() + ttl.Nanoseconds()
+	}
+
+	s.data[key] = memoryStoreItem{
+		value:     []byte(strconv.FormatInt(newVal, 10)),
+		expiresAt: expiresAt,
+	}
+	return newVal, true, nil
+}
+
+func (s *MemoryStore) getCounterLocked(key string) (int64, int64, error) {
+	rawItem, exists := s.data[key]
+	if !exists {
+		return 0, 0, nil
+	}
+
+	item, ok := rawItem.(memoryStoreItem)
+	if !ok {
+		return 0, 0, fmt.Errorf("type mismatch: key '%s' holds a different data type", key)
+	}
+
+	if item.expiresAt > 0 && time.Now().UnixNano() > item.expiresAt {
+		delete(s.data, key)
+		return 0, 0, nil
+	}
+
+	current, err := strconv.ParseInt(string(item.value), 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse counter key '%s': %w", key, err)
+	}
+
+	return current, item.expiresAt, nil
+}
+
 // --- HASH operations ---
 
 func (s *MemoryStore) HSet(key string, values map[string]any) error {

@@ -22,6 +22,13 @@ type KeyProvider struct {
 	store           store.Store
 	settingsManager *config.SystemSettingsManager
 	encryptionSvc   encryption.Service
+	affinityCleaner ProxyAffinityCleaner
+}
+
+// ProxyAffinityCleaner cleans outbound proxy affinity for removed keys.
+type ProxyAffinityCleaner interface {
+	RemoveProxyAffinity(groupID uint, keyIDs []uint)
+	ClearProxyAffinity(groupID uint)
 }
 
 // NewProvider 创建一个新的 KeyProvider 实例。
@@ -34,8 +41,17 @@ func NewProvider(db *gorm.DB, store store.Store, settingsManager *config.SystemS
 	}
 }
 
+// SetProxyAffinityCleaner registers a cleaner for group-level proxy affinity.
+func (p *KeyProvider) SetProxyAffinityCleaner(cleaner ProxyAffinityCleaner) {
+	p.affinityCleaner = cleaner
+}
+
 // SelectKey 为指定的分组原子性地选择并轮换一个可用的 APIKey。
 func (p *KeyProvider) SelectKey(groupID uint) (*models.APIKey, error) {
+	return p.selectKey(groupID)
+}
+
+func (p *KeyProvider) selectKey(groupID uint) (*models.APIKey, error) {
 	activeKeysListKey := fmt.Sprintf("group:%d:active_keys", groupID)
 
 	// 1. Atomically rotate the key ID from the list
@@ -363,6 +379,10 @@ func (p *KeyProvider) RemoveKeys(groupID uint, keyValues []string) (int64, error
 		return nil
 	})
 
+	if err == nil && len(keysToDelete) > 0 {
+		p.removeProxyAffinity(groupID, pluckIDs(keysToDelete))
+	}
+
 	return deletedCount, err
 }
 
@@ -510,6 +530,14 @@ func (p *KeyProvider) removeKeysByStatus(groupID uint, status ...string) (int64,
 		return nil
 	})
 
+	if err == nil && len(keysToRemove) > 0 {
+		if len(status) == 0 {
+			p.clearProxyAffinity(groupID)
+		} else {
+			p.removeProxyAffinity(groupID, pluckIDs(keysToRemove))
+		}
+	}
+
 	return removedCount, err
 }
 
@@ -546,6 +574,8 @@ func (p *KeyProvider) RemoveKeysFromStore(groupID uint, keyIDs []uint) error {
 		"groupID":  groupID,
 		"keyCount": len(keyIDs),
 	}).Info("Successfully cleaned up group keys from store")
+
+	p.clearProxyAffinity(groupID)
 
 	return nil
 }
@@ -647,4 +677,18 @@ func pluckIDs(keys []models.APIKey) []uint {
 		ids[i] = key.ID
 	}
 	return ids
+}
+
+func (p *KeyProvider) removeProxyAffinity(groupID uint, keyIDs []uint) {
+	if p.affinityCleaner == nil || len(keyIDs) == 0 {
+		return
+	}
+	p.affinityCleaner.RemoveProxyAffinity(groupID, keyIDs)
+}
+
+func (p *KeyProvider) clearProxyAffinity(groupID uint) {
+	if p.affinityCleaner == nil {
+		return
+	}
+	p.affinityCleaner.ClearProxyAffinity(groupID)
 }

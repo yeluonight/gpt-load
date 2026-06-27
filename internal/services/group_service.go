@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"gpt-load/internal/encryption"
 	app_errors "gpt-load/internal/errors"
 	"gpt-load/internal/models"
+	"gpt-load/internal/types"
 	"gpt-load/internal/utils"
 
 	"github.com/sirupsen/logrus"
@@ -872,7 +875,8 @@ func (s *GroupService) validateAndCleanConfig(configMap map[string]any) (map[str
 		}
 	}
 
-	if err := s.settingsManager.ValidateGroupConfigOverrides(configMap); err != nil {
+	systemConfigMap := filterSystemConfigOverrides(configMap)
+	if err := s.settingsManager.ValidateGroupConfigOverrides(systemConfigMap); err != nil {
 		return nil, NewI18nError(app_errors.ErrValidation, "error.invalid_config_format", map[string]any{"error": err.Error()})
 	}
 
@@ -883,6 +887,11 @@ func (s *GroupService) validateAndCleanConfig(configMap map[string]any) (map[str
 
 	var validatedConfig models.GroupConfig
 	if err := json.Unmarshal(configBytes, &validatedConfig); err != nil {
+		return nil, NewI18nError(app_errors.ErrValidation, "error.invalid_config_format", map[string]any{"error": err.Error()})
+	}
+
+	normalizeGroupRuntimeConfig(&validatedConfig)
+	if err := validateGroupRuntimeConfig(validatedConfig); err != nil {
 		return nil, NewI18nError(app_errors.ErrValidation, "error.invalid_config_format", map[string]any{"error": err.Error()})
 	}
 
@@ -897,6 +906,166 @@ func (s *GroupService) validateAndCleanConfig(configMap map[string]any) (map[str
 	}
 
 	return finalMap, nil
+}
+
+func filterSystemConfigOverrides(configMap map[string]any) map[string]any {
+	tempSettings := types.SystemSettings{}
+	settingsType := reflect.TypeOf(tempSettings)
+	validSystemFields := make(map[string]struct{})
+	for i := 0; i < settingsType.NumField(); i++ {
+		jsonTag := settingsType.Field(i).Tag.Get("json")
+		fieldName := strings.Split(jsonTag, ",")[0]
+		if fieldName != "" && fieldName != "-" {
+			validSystemFields[fieldName] = struct{}{}
+		}
+	}
+
+	filtered := make(map[string]any)
+	for key, value := range configMap {
+		if _, ok := validSystemFields[key]; ok {
+			filtered[key] = value
+		}
+	}
+	return filtered
+}
+
+func normalizeGroupRuntimeConfig(config *models.GroupConfig) {
+	if config == nil {
+		return
+	}
+
+	if len(config.ModelRateLimits) > 0 {
+		normalized := make([]models.ModelRateLimitConfig, 0, len(config.ModelRateLimits))
+		for _, limit := range config.ModelRateLimits {
+			limit.Model = strings.TrimSpace(limit.Model)
+			normalized = append(normalized, limit)
+		}
+		config.ModelRateLimits = normalized
+	}
+
+	if config.KeyRequestLimit != nil && config.KeyRequestLimit.MaxRequests > 0 {
+		config.KeyRequestLimit.ResetMode = strings.TrimSpace(strings.ToLower(config.KeyRequestLimit.ResetMode))
+		if config.KeyRequestLimit.ResetMode == "" {
+			if strings.TrimSpace(config.KeyRequestLimit.ResetTime) != "" {
+				config.KeyRequestLimit.ResetMode = "daily"
+			} else {
+				config.KeyRequestLimit.ResetMode = "interval"
+			}
+		}
+		if config.KeyRequestLimit.IntervalMinutes == 0 {
+			config.KeyRequestLimit.IntervalMinutes = 1440
+		}
+		if config.KeyRequestLimit.ResetTime == "" {
+			config.KeyRequestLimit.ResetTime = "00:00"
+		} else if normalized, err := normalizeDailyResetTime(config.KeyRequestLimit.ResetTime); err == nil {
+			config.KeyRequestLimit.ResetTime = normalized
+		}
+	}
+
+	if config.ProxyPool != nil {
+		proxies := make([]string, 0, len(config.ProxyPool.Proxies))
+		seen := make(map[string]struct{}, len(config.ProxyPool.Proxies))
+		for _, proxyURL := range config.ProxyPool.Proxies {
+			proxyURL = strings.TrimSpace(proxyURL)
+			if proxyURL == "" {
+				continue
+			}
+			if _, exists := seen[proxyURL]; exists {
+				continue
+			}
+			seen[proxyURL] = struct{}{}
+			proxies = append(proxies, proxyURL)
+		}
+		config.ProxyPool.Proxies = proxies
+		if config.ProxyPool.CooldownSeconds == 0 {
+			config.ProxyPool.CooldownSeconds = 60
+		}
+	}
+}
+
+func validateGroupRuntimeConfig(config models.GroupConfig) error {
+	seenModels := make(map[string]struct{}, len(config.ModelRateLimits))
+	for _, limit := range config.ModelRateLimits {
+		if limit.Model == "" {
+			return fmt.Errorf("model_rate_limits contains empty model")
+		}
+		if limit.RPM < 0 || limit.TPM < 0 {
+			return fmt.Errorf("model_rate_limits for %s must not contain negative rpm/tpm", limit.Model)
+		}
+		if limit.RPM == 0 && limit.TPM == 0 {
+			return fmt.Errorf("model_rate_limits for %s must set rpm or tpm", limit.Model)
+		}
+		modelKey := strings.ToLower(limit.Model)
+		if _, exists := seenModels[modelKey]; exists {
+			return fmt.Errorf("duplicate model_rate_limits entry for %s", limit.Model)
+		}
+		seenModels[modelKey] = struct{}{}
+	}
+
+	if config.KeyRequestLimit != nil {
+		limit := config.KeyRequestLimit
+		if limit.MaxRequests < 0 {
+			return fmt.Errorf("key_request_limit.max_requests must not be negative")
+		}
+		if limit.MaxRequests > 0 {
+			switch limit.ResetMode {
+			case "interval":
+				if limit.IntervalMinutes <= 0 {
+					return fmt.Errorf("key_request_limit.interval_minutes must be greater than 0")
+				}
+			case "daily":
+				if !isValidDailyResetTime(limit.ResetTime) {
+					return fmt.Errorf("key_request_limit.reset_time must use HH:MM or HH:MM:SS")
+				}
+			default:
+				return fmt.Errorf("key_request_limit.reset_mode must be interval or daily")
+			}
+		}
+	}
+
+	if config.ProxyPool != nil {
+		if config.ProxyPool.CooldownSeconds < 0 {
+			return fmt.Errorf("proxy_pool.cooldown_seconds must not be negative")
+		}
+		for _, proxyURL := range config.ProxyPool.Proxies {
+			parsed, err := url.Parse(proxyURL)
+			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+				return fmt.Errorf("invalid proxy URL: %s", proxyURL)
+			}
+		}
+	}
+
+	return nil
+}
+
+func isValidDailyResetTime(value string) bool {
+	_, err := normalizeDailyResetTime(value)
+	return err == nil
+}
+
+func normalizeDailyResetTime(value string) (string, error) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 && len(parts) != 3 {
+		return "", fmt.Errorf("reset time must use H:MM, HH:MM, H:MM:SS, or HH:MM:SS")
+	}
+
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil || hour < 0 || hour > 23 {
+		return "", fmt.Errorf("reset time hour must be between 0 and 23")
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil || minute < 0 || minute > 59 || len(parts[1]) != 2 {
+		return "", fmt.Errorf("reset time minute must use two digits from 00 to 59")
+	}
+	if len(parts) == 2 {
+		return fmt.Sprintf("%02d:%02d", hour, minute), nil
+	}
+
+	second, err := strconv.Atoi(parts[2])
+	if err != nil || second < 0 || second > 59 || len(parts[2]) != 2 {
+		return "", fmt.Errorf("reset time second must use two digits from 00 to 59")
+	}
+	return fmt.Sprintf("%02d:%02d:%02d", hour, minute, second), nil
 }
 
 // normalizeHeaderRules deduplicates and normalises header rules.

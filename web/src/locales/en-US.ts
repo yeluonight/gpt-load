@@ -330,6 +330,30 @@ export default {
     weightTooltip:
       "Load balancing weight configuration. Weight determines traffic distribution ratio - higher values receive more traffic. Weight 0 disables the upstream (no requests). Example: Weight 2:1 means the first receives ~67% of traffic",
     addUpstream: "Add Upstream",
+    usageLimits: "Usage Limits",
+    usageLimitsTooltip:
+      "Limit RPM/TPM per key by model, and optionally cap each key's request count per reset window. Limited keys are skipped while other keys in the group are tried.",
+    modelLimit: "Model Limit",
+    modelLimitTooltip:
+      "Use an exact model name, or * as the default limit. Empty or 0 RPM/TPM means unlimited.",
+    addModelLimit: "Add Model Limit",
+    modelRateLimitInvalid: "Model limit requires a model name and at least one RPM or TPM value",
+    keyRequestLimit: "Key Requests",
+    keyRequestLimitTooltip:
+      "Maximum upstream requests per key in one reset window. Empty or 0 means unlimited.",
+    maxRequests: "Max requests",
+    resetDaily: "Daily at time",
+    resetByInterval: "By interval",
+    intervalMinutes: "Interval minutes",
+    keyRequestLimitInvalid: "Invalid key request limit. Check the reset interval or reset time.",
+    proxyPool: "Proxy Pool",
+    proxyPoolTooltip:
+      "Configure multiple outbound proxies for this group. The system keeps a key on the same proxy when possible and spreads concurrent keys across proxies.",
+    proxyPoolInputTooltip:
+      "One proxy URL per line. Comma-separated values are also supported. Empty uses the normal proxy setting.",
+    proxyCooldown: "Proxy cooldown seconds",
+    proxyCooldownTooltip:
+      "How long to skip a proxy after a transport error. 0 uses the default 60 seconds.",
     groupConfig: "Group Configuration",
     groupConfigTooltip:
       "Group-specific configuration parameters like timeout, retry count, etc. These settings override global defaults",
