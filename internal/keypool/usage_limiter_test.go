@@ -90,6 +90,59 @@ func TestUsageReservationReleaseRollsBackCounters(t *testing.T) {
 	}
 }
 
+func TestModelRequestLimitIsScopedByModel(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	provider := &KeyProvider{store: memoryStore}
+	group := &models.Group{
+		ID: 1,
+		Config: datatypes.JSONMap{
+			"key_request_limit": map[string]any{
+				"max_requests":     10,
+				"reset_mode":       "interval",
+				"interval_minutes": 60,
+			},
+			"model_rate_limits": []any{
+				map[string]any{
+					"model": "gpt-a",
+					"request_limit": map[string]any{
+						"max_requests":     1,
+						"reset_mode":       "interval",
+						"interval_minutes": 60,
+					},
+				},
+			},
+		},
+	}
+	apiKey := &models.APIKey{ID: 1}
+
+	if _, err := provider.reserveUsage(group, apiKey, "gpt-a", 1); err != nil {
+		t.Fatalf("first gpt-a reserve returned error: %v", err)
+	}
+	if _, err := provider.reserveUsage(group, apiKey, "gpt-a", 1); !IsLimitExceeded(err) {
+		t.Fatalf("second gpt-a reserve error = %v, want LimitExceededError", err)
+	}
+	if _, err := provider.reserveUsage(group, apiKey, "gpt-b", 1); err != nil {
+		t.Fatalf("gpt-b reserve returned error: %v", err)
+	}
+}
+
+func TestDailyResetWindowUsesPacificTime(t *testing.T) {
+	now := time.Date(2026, 6, 27, 6, 59, 0, 0, time.UTC)
+	windowStart, windowEnd, err := dailyResetWindow(now, "00:00")
+	if err != nil {
+		t.Fatalf("dailyResetWindow returned error: %v", err)
+	}
+
+	wantStart := time.Date(2026, 6, 26, 7, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 6, 27, 7, 0, 0, 0, time.UTC)
+	if !windowStart.Equal(wantStart) {
+		t.Fatalf("windowStart = %s, want %s", windowStart.In(time.UTC), wantStart)
+	}
+	if !windowEnd.Equal(wantEnd) {
+		t.Fatalf("windowEnd = %s, want %s", windowEnd.In(time.UTC), wantEnd)
+	}
+}
+
 func TestIsLimitExceeded(t *testing.T) {
 	if !IsLimitExceeded(&LimitExceededError{Reason: "limited"}) {
 		t.Fatal("LimitExceededError was not detected")

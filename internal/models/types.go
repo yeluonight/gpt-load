@@ -49,18 +49,22 @@ type GroupConfig struct {
 
 // ModelRateLimitConfig defines per-key limits for a specific model.
 type ModelRateLimitConfig struct {
-	Model string `json:"model"`
-	RPM   int64  `json:"rpm,omitempty"`
-	TPM   int64  `json:"tpm,omitempty"`
+	Model        string              `json:"model"`
+	RPM          int64               `json:"rpm,omitempty"`
+	TPM          int64               `json:"tpm,omitempty"`
+	RequestLimit *RequestLimitConfig `json:"request_limit,omitempty"`
 }
 
-// KeyRequestLimitConfig defines per-key request quota and reset policy.
-type KeyRequestLimitConfig struct {
+// RequestLimitConfig defines request quota and reset policy.
+type RequestLimitConfig struct {
 	MaxRequests     int64  `json:"max_requests,omitempty"`
 	ResetMode       string `json:"reset_mode,omitempty"`       // "interval" or "daily"
 	IntervalMinutes int    `json:"interval_minutes,omitempty"` // Used when reset_mode is "interval"
 	ResetTime       string `json:"reset_time,omitempty"`       // HH:MM or HH:MM:SS, used when reset_mode is "daily"
 }
+
+// KeyRequestLimitConfig defines per-key request quota and reset policy.
+type KeyRequestLimitConfig = RequestLimitConfig
 
 // ProxyPoolConfig defines a group-level outbound proxy pool.
 type ProxyPoolConfig struct {

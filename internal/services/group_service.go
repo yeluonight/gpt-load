@@ -938,29 +938,13 @@ func normalizeGroupRuntimeConfig(config *models.GroupConfig) {
 		normalized := make([]models.ModelRateLimitConfig, 0, len(config.ModelRateLimits))
 		for _, limit := range config.ModelRateLimits {
 			limit.Model = strings.TrimSpace(limit.Model)
+			normalizeRequestLimitConfig(limit.RequestLimit)
 			normalized = append(normalized, limit)
 		}
 		config.ModelRateLimits = normalized
 	}
 
-	if config.KeyRequestLimit != nil && config.KeyRequestLimit.MaxRequests > 0 {
-		config.KeyRequestLimit.ResetMode = strings.TrimSpace(strings.ToLower(config.KeyRequestLimit.ResetMode))
-		if config.KeyRequestLimit.ResetMode == "" {
-			if strings.TrimSpace(config.KeyRequestLimit.ResetTime) != "" {
-				config.KeyRequestLimit.ResetMode = "daily"
-			} else {
-				config.KeyRequestLimit.ResetMode = "interval"
-			}
-		}
-		if config.KeyRequestLimit.IntervalMinutes == 0 {
-			config.KeyRequestLimit.IntervalMinutes = 1440
-		}
-		if config.KeyRequestLimit.ResetTime == "" {
-			config.KeyRequestLimit.ResetTime = "00:00"
-		} else if normalized, err := normalizeDailyResetTime(config.KeyRequestLimit.ResetTime); err == nil {
-			config.KeyRequestLimit.ResetTime = normalized
-		}
-	}
+	normalizeRequestLimitConfig(config.KeyRequestLimit)
 
 	if config.ProxyPool != nil {
 		proxies := make([]string, 0, len(config.ProxyPool.Proxies))
@@ -992,8 +976,11 @@ func validateGroupRuntimeConfig(config models.GroupConfig) error {
 		if limit.RPM < 0 || limit.TPM < 0 {
 			return fmt.Errorf("model_rate_limits for %s must not contain negative rpm/tpm", limit.Model)
 		}
-		if limit.RPM == 0 && limit.TPM == 0 {
-			return fmt.Errorf("model_rate_limits for %s must set rpm or tpm", limit.Model)
+		if err := validateRequestLimitConfig("model_rate_limits.request_limit", limit.RequestLimit); err != nil {
+			return err
+		}
+		if limit.RPM == 0 && limit.TPM == 0 && (limit.RequestLimit == nil || limit.RequestLimit.MaxRequests == 0) {
+			return fmt.Errorf("model_rate_limits for %s must set rpm, tpm, or request_limit.max_requests", limit.Model)
 		}
 		modelKey := strings.ToLower(limit.Model)
 		if _, exists := seenModels[modelKey]; exists {
@@ -1002,25 +989,8 @@ func validateGroupRuntimeConfig(config models.GroupConfig) error {
 		seenModels[modelKey] = struct{}{}
 	}
 
-	if config.KeyRequestLimit != nil {
-		limit := config.KeyRequestLimit
-		if limit.MaxRequests < 0 {
-			return fmt.Errorf("key_request_limit.max_requests must not be negative")
-		}
-		if limit.MaxRequests > 0 {
-			switch limit.ResetMode {
-			case "interval":
-				if limit.IntervalMinutes <= 0 {
-					return fmt.Errorf("key_request_limit.interval_minutes must be greater than 0")
-				}
-			case "daily":
-				if !isValidDailyResetTime(limit.ResetTime) {
-					return fmt.Errorf("key_request_limit.reset_time must use HH:MM or HH:MM:SS")
-				}
-			default:
-				return fmt.Errorf("key_request_limit.reset_mode must be interval or daily")
-			}
-		}
+	if err := validateRequestLimitConfig("key_request_limit", config.KeyRequestLimit); err != nil {
+		return err
 	}
 
 	if config.ProxyPool != nil {
@@ -1035,6 +1005,53 @@ func validateGroupRuntimeConfig(config models.GroupConfig) error {
 		}
 	}
 
+	return nil
+}
+
+func normalizeRequestLimitConfig(limit *models.RequestLimitConfig) {
+	if limit == nil || limit.MaxRequests <= 0 {
+		return
+	}
+	limit.ResetMode = strings.TrimSpace(strings.ToLower(limit.ResetMode))
+	if limit.ResetMode == "" {
+		if strings.TrimSpace(limit.ResetTime) != "" {
+			limit.ResetMode = "daily"
+		} else {
+			limit.ResetMode = "interval"
+		}
+	}
+	if limit.IntervalMinutes == 0 {
+		limit.IntervalMinutes = 1440
+	}
+	if limit.ResetTime == "" {
+		limit.ResetTime = "00:00"
+	} else if normalized, err := normalizeDailyResetTime(limit.ResetTime); err == nil {
+		limit.ResetTime = normalized
+	}
+}
+
+func validateRequestLimitConfig(field string, limit *models.RequestLimitConfig) error {
+	if limit == nil {
+		return nil
+	}
+	if limit.MaxRequests < 0 {
+		return fmt.Errorf("%s.max_requests must not be negative", field)
+	}
+	if limit.MaxRequests == 0 {
+		return nil
+	}
+	switch limit.ResetMode {
+	case "interval":
+		if limit.IntervalMinutes <= 0 {
+			return fmt.Errorf("%s.interval_minutes must be greater than 0", field)
+		}
+	case "daily":
+		if !isValidDailyResetTime(limit.ResetTime) {
+			return fmt.Errorf("%s.reset_time must use HH:MM or HH:MM:SS", field)
+		}
+	default:
+		return fmt.Errorf("%s.reset_mode must be interval or daily", field)
+	}
 	return nil
 }
 

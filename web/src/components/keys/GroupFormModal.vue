@@ -43,14 +43,19 @@ interface ModelRateLimitItem {
   model: string;
   rpm: number | null;
   tpm: number | null;
+  request_limit: RequestLimitForm;
 }
 
-interface KeyRequestLimitForm {
+type ResetMode = "interval" | "daily";
+
+interface RequestLimitForm {
   max_requests: number | null;
-  reset_mode: "interval" | "daily";
+  reset_mode: ResetMode;
   interval_minutes: number | null;
   reset_time: string;
 }
+
+type KeyRequestLimitForm = RequestLimitForm;
 
 // Header规则类型
 interface HeaderRuleItem {
@@ -73,6 +78,15 @@ const modelRedirectTip = `{
   "gpt-5": "gpt-5-2025-08-07",
   "gemini-2.5-flash": "gemini-2.5-flash-preview-09-2025"
 }`;
+
+function createRequestLimitDefaults(): RequestLimitForm {
+  return {
+    max_requests: null,
+    reset_mode: "daily",
+    interval_minutes: 1440,
+    reset_time: "00:00",
+  };
+}
 
 // 表单数据接口
 interface GroupFormData {
@@ -119,12 +133,7 @@ const formData = reactive<GroupFormData>({
   config: {},
   configItems: [] as ConfigItem[],
   model_rate_limits: [] as ModelRateLimitItem[],
-  key_request_limit: {
-    max_requests: null,
-    reset_mode: "daily",
-    interval_minutes: 1440,
-    reset_time: "00:00",
-  },
+  key_request_limit: createRequestLimitDefaults(),
   proxy_pool: "",
   proxy_pool_cooldown_seconds: 60,
   header_rules: [] as HeaderRuleItem[],
@@ -334,12 +343,7 @@ function resetForm() {
     config: {},
     configItems: [],
     model_rate_limits: [],
-    key_request_limit: {
-      max_requests: null,
-      reset_mode: "daily",
-      interval_minutes: 1440,
-      reset_time: "00:00",
-    },
+    key_request_limit: createRequestLimitDefaults(),
     proxy_pool: "",
     proxy_pool_cooldown_seconds: 60,
     header_rules: [],
@@ -466,17 +470,13 @@ function normalizeModelRateLimits(value: unknown): ModelRateLimitItem[] {
         model: String(record.model || ""),
         rpm: typeof record.rpm === "number" ? record.rpm : null,
         tpm: typeof record.tpm === "number" ? record.tpm : null,
+        request_limit: normalizeRequestLimit(record.request_limit),
       };
     });
 }
 
-function normalizeKeyRequestLimit(value: unknown): KeyRequestLimitForm {
-  const defaults: KeyRequestLimitForm = {
-    max_requests: null,
-    reset_mode: "daily",
-    interval_minutes: 1440,
-    reset_time: "00:00",
-  };
+function normalizeRequestLimit(value: unknown): RequestLimitForm {
+  const defaults = createRequestLimitDefaults();
   if (!value || typeof value !== "object") {
     return defaults;
   }
@@ -491,6 +491,10 @@ function normalizeKeyRequestLimit(value: unknown): KeyRequestLimitForm {
         : defaults.interval_minutes,
     reset_time: typeof record.reset_time === "string" ? record.reset_time : defaults.reset_time,
   };
+}
+
+function normalizeKeyRequestLimit(value: unknown): KeyRequestLimitForm {
+  return normalizeRequestLimit(value);
 }
 
 function normalizeProxyPool(value: unknown): { proxies: string[]; cooldown_seconds: number } {
@@ -528,6 +532,9 @@ function normalizeDailyResetTime(value: string): string | null {
   if (parts.length !== 2 && parts.length !== 3) {
     return null;
   }
+  if (!/^\d{1,2}$/.test(parts[0])) {
+    return null;
+  }
   const hour = Number(parts[0]);
   const minute = Number(parts[1]);
   if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
@@ -546,11 +553,37 @@ function normalizeDailyResetTime(value: string): string | null {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
 }
 
+function buildRequestLimitPayload(limit: RequestLimitForm): Record<string, unknown> | null | false {
+  if (!limit.max_requests || limit.max_requests <= 0) {
+    return null;
+  }
+
+  const payload: Record<string, unknown> = {
+    max_requests: limit.max_requests,
+    reset_mode: limit.reset_mode,
+  };
+  if (limit.reset_mode === "interval") {
+    if (!limit.interval_minutes || limit.interval_minutes <= 0) {
+      return false;
+    }
+    payload.interval_minutes = limit.interval_minutes;
+    return payload;
+  }
+
+  const resetTime = normalizeDailyResetTime(limit.reset_time);
+  if (!resetTime) {
+    return false;
+  }
+  payload.reset_time = resetTime;
+  return payload;
+}
+
 function addModelRateLimit() {
   formData.model_rate_limits.push({
     model: "",
     rpm: null,
     tpm: null,
+    request_limit: createRequestLimitDefaults(),
   });
 }
 
@@ -675,45 +708,48 @@ async function handleSubmit() {
       }
     });
 
-    const modelRateLimits = formData.model_rate_limits
-      .map(item => ({
-        model: item.model.trim(),
-        rpm: Number(item.rpm || 0),
-        tpm: Number(item.tpm || 0),
-      }))
-      .filter(item => item.model || item.rpm > 0 || item.tpm > 0);
-    for (const item of modelRateLimits) {
-      if (!item.model || (item.rpm <= 0 && item.tpm <= 0)) {
+    const modelRateLimits: Record<string, unknown>[] = [];
+    for (const item of formData.model_rate_limits) {
+      const model = item.model.trim();
+      const rpm = Number(item.rpm || 0);
+      const tpm = Number(item.tpm || 0);
+      const requestLimit = buildRequestLimitPayload(item.request_limit);
+      if (requestLimit === false) {
         message.error(t("keys.modelRateLimitInvalid"));
         return;
       }
+
+      const hasModelLimit = rpm > 0 || tpm > 0 || !!requestLimit;
+      if (!model && !hasModelLimit) {
+        continue;
+      }
+      if (!model || !hasModelLimit) {
+        message.error(t("keys.modelRateLimitInvalid"));
+        return;
+      }
+
+      const payload: Record<string, unknown> = { model };
+      if (rpm > 0) {
+        payload.rpm = rpm;
+      }
+      if (tpm > 0) {
+        payload.tpm = tpm;
+      }
+      if (requestLimit) {
+        payload.request_limit = requestLimit;
+      }
+      modelRateLimits.push(payload);
     }
     if (modelRateLimits.length > 0) {
       config.model_rate_limits = modelRateLimits;
     }
 
-    if (formData.key_request_limit.max_requests && formData.key_request_limit.max_requests > 0) {
-      const keyRequestLimit: Record<string, unknown> = {
-        max_requests: formData.key_request_limit.max_requests,
-        reset_mode: formData.key_request_limit.reset_mode,
-      };
-      if (formData.key_request_limit.reset_mode === "interval") {
-        if (
-          !formData.key_request_limit.interval_minutes ||
-          formData.key_request_limit.interval_minutes <= 0
-        ) {
-          message.error(t("keys.keyRequestLimitInvalid"));
-          return;
-        }
-        keyRequestLimit.interval_minutes = formData.key_request_limit.interval_minutes;
-      } else {
-        const resetTime = normalizeDailyResetTime(formData.key_request_limit.reset_time);
-        if (!resetTime) {
-          message.error(t("keys.keyRequestLimitInvalid"));
-          return;
-        }
-        keyRequestLimit.reset_time = resetTime;
-      }
+    const keyRequestLimit = buildRequestLimitPayload(formData.key_request_limit);
+    if (keyRequestLimit === false) {
+      message.error(t("keys.keyRequestLimitInvalid"));
+      return;
+    }
+    if (keyRequestLimit) {
       config.key_request_limit = keyRequestLimit;
     }
 
@@ -1089,10 +1125,8 @@ async function handleSubmit() {
                       </div>
                     </template>
                     <div class="rate-limit-content">
-                      <div class="rate-limit-model">
+                      <div class="rate-limit-main">
                         <n-input v-model:value="limit.model" placeholder="gpt-4.1, *" />
-                      </div>
-                      <div class="rate-limit-number">
                         <n-input-number
                           v-model:value="limit.rpm"
                           :min="0"
@@ -1100,28 +1134,52 @@ async function handleSubmit() {
                           placeholder="RPM"
                           style="width: 100%"
                         />
-                      </div>
-                      <div class="rate-limit-number">
                         <n-input-number
                           v-model:value="limit.tpm"
                           :min="0"
                           :precision="0"
-                          placeholder="TPM"
+                          :placeholder="t('keys.tpmPlaceholder')"
                           style="width: 100%"
                         />
+                        <n-input-number
+                          v-model:value="limit.request_limit.max_requests"
+                          :min="0"
+                          :precision="0"
+                          :placeholder="t('keys.modelMaxRequests')"
+                          style="width: 100%"
+                        />
+                        <div class="config-actions">
+                          <n-button
+                            @click="removeModelRateLimit(index)"
+                            type="error"
+                            quaternary
+                            circle
+                            size="small"
+                          >
+                            <template #icon>
+                              <n-icon :component="Remove" />
+                            </template>
+                          </n-button>
+                        </div>
                       </div>
-                      <div class="config-actions">
-                        <n-button
-                          @click="removeModelRateLimit(index)"
-                          type="error"
-                          quaternary
-                          circle
-                          size="small"
-                        >
-                          <template #icon>
-                            <n-icon :component="Remove" />
-                          </template>
-                        </n-button>
+                      <div class="rate-limit-reset">
+                        <n-select
+                          v-model:value="limit.request_limit.reset_mode"
+                          :options="resetModeOptions"
+                        />
+                        <n-input-number
+                          v-if="limit.request_limit.reset_mode === 'interval'"
+                          v-model:value="limit.request_limit.interval_minutes"
+                          :min="1"
+                          :precision="0"
+                          :placeholder="t('keys.intervalMinutes')"
+                          style="width: 100%"
+                        />
+                        <n-input
+                          v-else
+                          v-model:value="limit.request_limit.reset_time"
+                          placeholder="00:00 PT"
+                        />
                       </div>
                     </div>
                   </n-form-item>
@@ -1171,7 +1229,7 @@ async function handleSubmit() {
                     <n-input
                       v-else
                       v-model:value="formData.key_request_limit.reset_time"
-                      placeholder="00:00"
+                      placeholder="00:00 PT"
                     />
                   </div>
                 </n-form-item>
@@ -1826,17 +1884,24 @@ async function handleSubmit() {
 
 .rate-limit-content {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 12px;
   width: 100%;
 }
 
-.rate-limit-model {
-  flex: 1;
+.rate-limit-main {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) 110px 150px 150px 32px;
+  gap: 12px;
+  width: 100%;
+  align-items: center;
 }
 
-.rate-limit-number {
-  flex: 0 0 120px;
+.rate-limit-reset {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
 }
 
 .key-request-limit-content {
@@ -1869,8 +1934,7 @@ async function handleSubmit() {
   }
 
   .upstream-row,
-  .config-item-content,
-  .rate-limit-content {
+  .config-item-content {
     flex-direction: column;
     gap: 8px;
     align-items: stretch;
@@ -1886,8 +1950,9 @@ async function handleSubmit() {
     flex: 1;
   }
 
-  .rate-limit-number {
-    flex: 1;
+  .rate-limit-main,
+  .rate-limit-reset {
+    grid-template-columns: 1fr;
   }
 
   .key-request-limit-content {

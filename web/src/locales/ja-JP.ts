@@ -331,17 +331,20 @@ export default {
     addUpstream: "アップストリーム追加",
     usageLimits: "使用量制限",
     usageLimitsTooltip:
-      "モデルごとに各キーのRPM/TPMを制限し、必要に応じてリセット期間ごとのリクエスト数を制限します。制限に達したキーはスキップされ、同じグループ内の他のキーが試行されます。",
+      "モデルごとに各キーのRPM/TPMとモデル別リクエスト数を制限し、各キーの総リクエスト数も別々に制限できます。制限に達したキーはスキップされ、同じグループ内の他のキーが試行されます。",
     modelLimit: "モデル制限",
     modelLimitTooltip:
-      "正確なモデル名を指定します。* はデフォルト制限として使用できます。RPM/TPMが空または0の場合は無制限です。",
+      "正確なモデル名を指定します。* はデフォルト制限として使用できます。TPMの単位は tokens/min で、250000 のような数値を入力します。毎日のリセット時刻は太平洋時間（PT）で計算されます。",
+    tpmPlaceholder: "TPM (tokens/min)",
+    modelMaxRequests: "モデル期間リクエスト数",
     addModelLimit: "モデル制限を追加",
-    modelRateLimitInvalid: "モデル制限にはモデル名とRPMまたはTPMの少なくとも一方が必要です",
+    modelRateLimitInvalid:
+      "モデル制限にはモデル名とRPM、TPM、またはモデル期間リクエスト数の少なくとも1つが必要です",
     keyRequestLimit: "キーリクエスト数",
     keyRequestLimitTooltip:
-      "1つのリセット期間内で各キーが送信できる上流リクエスト数の上限です。空または0は無制限です。",
+      "1つのリセット期間内で各キーが送信できる上流リクエスト総数の上限です。モデル別リクエスト数とは独立して計算されます。毎日のリセット時刻は太平洋時間（PT）です。空または0は無制限です。",
     maxRequests: "最大リクエスト数",
-    resetDaily: "毎日指定時刻",
+    resetDaily: "毎日指定時刻 (PT)",
     resetByInterval: "周期でリセット",
     intervalMinutes: "周期（分）",
     keyRequestLimitInvalid:

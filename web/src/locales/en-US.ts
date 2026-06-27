@@ -332,17 +332,20 @@ export default {
     addUpstream: "Add Upstream",
     usageLimits: "Usage Limits",
     usageLimitsTooltip:
-      "Limit RPM/TPM per key by model, and optionally cap each key's request count per reset window. Limited keys are skipped while other keys in the group are tried.",
+      "Limit per-key RPM/TPM and per-model request quotas by model, and separately cap each key's total request count per reset window. Limited keys are skipped while other keys in the group are tried.",
     modelLimit: "Model Limit",
     modelLimitTooltip:
-      "Use an exact model name, or * as the default limit. Empty or 0 RPM/TPM means unlimited.",
+      "Use an exact model name, or * as the default limit. TPM is tokens/min; enter a plain number such as 250000. Daily reset times use Pacific Time (PT).",
+    tpmPlaceholder: "TPM (tokens/min)",
+    modelMaxRequests: "Model window requests",
     addModelLimit: "Add Model Limit",
-    modelRateLimitInvalid: "Model limit requires a model name and at least one RPM or TPM value",
+    modelRateLimitInvalid:
+      "Model limit requires a model name and at least one RPM, TPM, or model request quota value",
     keyRequestLimit: "Key Requests",
     keyRequestLimitTooltip:
-      "Maximum upstream requests per key in one reset window. Empty or 0 means unlimited.",
+      "Maximum total upstream requests per key in one reset window. This is counted independently from per-model request quotas. Daily reset times use Pacific Time (PT). Empty or 0 means unlimited.",
     maxRequests: "Max requests",
-    resetDaily: "Daily at time",
+    resetDaily: "Daily at time (PT)",
     resetByInterval: "By interval",
     intervalMinutes: "Interval minutes",
     keyRequestLimitInvalid: "Invalid key request limit. Check the reset interval or reset time.",

@@ -8,7 +8,10 @@ import (
 	"gpt-load/internal/models"
 	"strings"
 	"time"
+	_ "time/tzdata"
 )
+
+var pacificLocation = loadPacificLocation()
 
 type usageCounter struct {
 	key  string
@@ -100,9 +103,10 @@ func (p *KeyProvider) reserveUsage(group *models.Group, apiKey *models.APIKey, m
 		return nil, fmt.Errorf("failed to decode group config: %w", err)
 	}
 
+	now := time.Now()
 	reservation := &UsageReservation{provider: p}
 	if groupConfig.KeyRequestLimit != nil && groupConfig.KeyRequestLimit.MaxRequests > 0 {
-		counterKey, ttl, err := keyRequestLimitCounter(group.ID, apiKey.ID, groupConfig.KeyRequestLimit, time.Now())
+		counterKey, ttl, err := keyRequestLimitCounter(group.ID, apiKey.ID, groupConfig.KeyRequestLimit, now)
 		if err != nil {
 			return nil, err
 		}
@@ -112,9 +116,9 @@ func (p *KeyProvider) reserveUsage(group *models.Group, apiKey *models.APIKey, m
 	}
 
 	if limit, ok := findModelRateLimit(groupConfig.ModelRateLimits, model); ok {
-		ttl := minuteTTL(time.Now())
+		ttl := minuteTTL(now)
 		modelKey := modelCounterToken(model)
-		minuteBucket := time.Now().Unix() / 60
+		minuteBucket := now.Unix() / 60
 		if limit.RPM > 0 {
 			counterKey := fmt.Sprintf("usage:group:%d:key:%d:model:%s:rpm:%d", group.ID, apiKey.ID, modelKey, minuteBucket)
 			if err := p.tryReserveCounter(reservation, counterKey, 1, limit.RPM, ttl, "model rpm limit reached"); err != nil {
@@ -127,6 +131,15 @@ func (p *KeyProvider) reserveUsage(group *models.Group, apiKey *models.APIKey, m
 			}
 			counterKey := fmt.Sprintf("usage:group:%d:key:%d:model:%s:tpm:%d", group.ID, apiKey.ID, modelKey, minuteBucket)
 			if err := p.tryReserveCounter(reservation, counterKey, tokenEstimate, limit.TPM, ttl, "model tpm limit reached"); err != nil {
+				return nil, err
+			}
+		}
+		if limit.RequestLimit != nil && limit.RequestLimit.MaxRequests > 0 {
+			counterKey, ttl, err := modelRequestLimitCounter(group.ID, apiKey.ID, modelKey, limit.RequestLimit, now)
+			if err != nil {
+				return nil, err
+			}
+			if err := p.tryReserveCounter(reservation, counterKey, 1, limit.RequestLimit.MaxRequests, ttl, "model request limit reached"); err != nil {
 				return nil, err
 			}
 		}
@@ -175,6 +188,14 @@ func minuteTTL(now time.Time) time.Duration {
 }
 
 func keyRequestLimitCounter(groupID, keyID uint, limit *models.KeyRequestLimitConfig, now time.Time) (string, time.Duration, error) {
+	return requestLimitCounter(fmt.Sprintf("usage:group:%d:key:%d:req", groupID, keyID), limit, now)
+}
+
+func modelRequestLimitCounter(groupID, keyID uint, modelKey string, limit *models.RequestLimitConfig, now time.Time) (string, time.Duration, error) {
+	return requestLimitCounter(fmt.Sprintf("usage:group:%d:key:%d:model:%s:req", groupID, keyID, modelKey), limit, now)
+}
+
+func requestLimitCounter(prefix string, limit *models.RequestLimitConfig, now time.Time) (string, time.Duration, error) {
 	switch strings.ToLower(strings.TrimSpace(limit.ResetMode)) {
 	case "", "interval":
 		interval := time.Duration(limit.IntervalMinutes) * time.Minute
@@ -183,15 +204,15 @@ func keyRequestLimitCounter(groupID, keyID uint, limit *models.KeyRequestLimitCo
 		}
 		bucket := now.Unix() / int64(interval.Seconds())
 		windowEnd := time.Unix((bucket+1)*int64(interval.Seconds()), 0)
-		return fmt.Sprintf("usage:group:%d:key:%d:req:interval:%d", groupID, keyID, bucket), windowEnd.Sub(now) + 5*time.Second, nil
+		return fmt.Sprintf("%s:interval:%d", prefix, bucket), windowEnd.Sub(now) + 5*time.Second, nil
 	case "daily":
 		windowStart, windowEnd, err := dailyResetWindow(now, limit.ResetTime)
 		if err != nil {
 			return "", 0, err
 		}
-		return fmt.Sprintf("usage:group:%d:key:%d:req:daily:%s", groupID, keyID, windowStart.Format("20060102T150405")), windowEnd.Sub(now) + 5*time.Second, nil
+		return fmt.Sprintf("%s:daily:%s", prefix, windowStart.In(pacificLocation).Format("20060102T150405")), windowEnd.Sub(now) + 5*time.Second, nil
 	default:
-		return "", 0, fmt.Errorf("unsupported key request reset mode: %s", limit.ResetMode)
+		return "", 0, fmt.Errorf("unsupported request reset mode: %s", limit.ResetMode)
 	}
 }
 
@@ -204,16 +225,25 @@ func dailyResetWindow(now time.Time, resetTime string) (time.Time, time.Time, er
 	if strings.Count(resetTime, ":") == 2 {
 		layout = "15:04:05"
 	}
-	parsed, err := time.ParseInLocation(layout, resetTime, now.Location())
+	parsed, err := time.ParseInLocation(layout, resetTime, pacificLocation)
 	if err != nil {
 		return time.Time{}, time.Time{}, fmt.Errorf("invalid daily reset_time %q: %w", resetTime, err)
 	}
 
-	todayReset := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), parsed.Second(), 0, now.Location())
-	if now.Before(todayReset) {
+	pacificNow := now.In(pacificLocation)
+	todayReset := time.Date(pacificNow.Year(), pacificNow.Month(), pacificNow.Day(), parsed.Hour(), parsed.Minute(), parsed.Second(), 0, pacificLocation)
+	if pacificNow.Before(todayReset) {
 		return todayReset.AddDate(0, 0, -1), todayReset, nil
 	}
 	return todayReset, todayReset.AddDate(0, 0, 1), nil
+}
+
+func loadPacificLocation() *time.Location {
+	location, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		return time.FixedZone("America/Los_Angeles", -8*60*60)
+	}
+	return location
 }
 
 func modelCounterToken(model string) string {

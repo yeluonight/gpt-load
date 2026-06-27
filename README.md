@@ -47,7 +47,7 @@ For detailed documentation, please visit [Official Documentation](https://www.gp
 - **High-Performance Design**: Zero-copy streaming, connection pool reuse, and atomic operations
 - **Production Ready**: Graceful shutdown, error recovery, and comprehensive security mechanisms
 - **Dual Authentication**: Separate authentication for management and proxy, with proxy authentication supporting global and group-level keys
-- **Group Usage Protection**: Configure per-key RPM/TPM limits by model and optional per-key request quotas per reset window
+- **Group Usage Protection**: Configure per-key RPM/TPM and per-model request quotas by model, plus an independent per-key total request quota
 - **Group Proxy Pool**: Configure outbound proxy pools directly on groups, keeping a key sticky to one proxy where possible while spreading concurrent keys across proxy exits
 
 ## Supported AI Services
@@ -286,8 +286,8 @@ Supported Proxy Protocol Formats:
 | Key Validation Interval    | `key_validation_interval_minutes` | 60      | ✅             | Background scheduled key validation cycle (minutes)                        |
 | Key Validation Concurrency | `key_validation_concurrency`      | 10      | ✅             | Concurrency for background validation of invalid keys                      |
 | Key Validation Timeout     | `key_validation_timeout_seconds`  | 20      | ✅             | API request timeout for validating individual keys in background (seconds) |
-| Model RPM/TPM Limits       | `model_rate_limits`               | -       | ✅             | Per-key per-model request and token limits; limited keys are skipped       |
-| Key Request Quota          | `key_request_limit`               | -       | ✅             | Per-key request quota per reset window; supports interval or daily reset   |
+| Model RPM/TPM/Request Quota | `model_rate_limits`               | -       | ✅             | Per-key per-model request, token, and reset-window request limits; limited keys are skipped |
+| Key Total Request Quota    | `key_request_limit`               | -       | ✅             | Per-key total request quota per reset window, counted independently from model quotas |
 
 </details>
 
@@ -298,11 +298,20 @@ All fields below are optional group configuration fields. Existing configuration
 ```json
 {
   "model_rate_limits": [
-    { "model": "gpt-4.1-mini", "rpm": 60, "tpm": 120000 },
+    {
+      "model": "gpt-4.1-mini",
+      "rpm": 60,
+      "tpm": 250000,
+      "request_limit": {
+        "max_requests": 1000,
+        "reset_mode": "daily",
+        "reset_time": "00:00"
+      }
+    },
     { "model": "*", "rpm": 30 }
   ],
   "key_request_limit": {
-    "max_requests": 1000,
+    "max_requests": 5000,
     "reset_mode": "daily",
     "reset_time": "00:00"
   },
@@ -316,8 +325,9 @@ All fields below are optional group configuration fields. Existing configuration
 }
 ```
 
-- `model_rate_limits`: `model` supports exact model names, and `*` acts as the default limit. Either `rpm` or `tpm` must be greater than 0.
-- `key_request_limit`: `reset_mode` supports `interval` and `daily`; `interval` uses `interval_minutes`, while `daily` uses `reset_time`. Time accepts `HH:MM` or `HH:MM:SS`.
+- `model_rate_limits`: `model` supports exact model names, and `*` acts as the default limit. `rpm` is requests per minute, `tpm` is tokens per minute. Enter TPM as a plain number, for example `250000`, not `250k`. `request_limit` limits how many times each key may call that model in one reset window.
+- `key_request_limit`: Limits each key's total request count, counted independently from `model_rate_limits[].request_limit`.
+- Reset policy: `reset_mode` supports `interval` and `daily`; `interval` uses `interval_minutes`, while `daily` uses `reset_time`. Time accepts `HH:MM` or `HH:MM:SS`. Daily reset times are evaluated in Pacific Time (PT, `America/Los_Angeles`).
 - `proxy_pool`: accepts an object, string array, or newline/comma-separated string. Unavailable proxies enter a temporary cooldown and requests switch to another available proxy.
 
 ## Data Encryption Migration
