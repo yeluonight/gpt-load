@@ -1,12 +1,14 @@
 package httpclient
 
 import (
+	"bufio"
 	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestStripSensitiveOnCrossHostRedirect asserts that the custom-named x-api-key
@@ -98,6 +100,60 @@ func TestExplicitInvalidProxyDoesNotFallbackToEnvironment(t *testing.T) {
 	}
 	if proxyHit {
 		t.Fatal("request fell back to environment proxy despite explicit proxy config")
+	}
+}
+
+func TestExplicitProxyReceivesHTTPSConnect(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen proxy: %v", err)
+	}
+	defer listener.Close()
+
+	firstLineCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+
+		line, err := bufio.NewReader(conn).ReadString('\n')
+		if err != nil {
+			errCh <- err
+			return
+		}
+		firstLineCh <- strings.TrimSpace(line)
+	}()
+
+	manager := NewHTTPClientManager()
+	client := manager.GetClient(&Config{
+		ConnectTimeout:        time.Second,
+		RequestTimeout:        time.Second,
+		IdleConnTimeout:       time.Second,
+		MaxIdleConns:          1,
+		MaxIdleConnsPerHost:   1,
+		ResponseHeaderTimeout: time.Second,
+		ProxyURL:              "http://" + listener.Addr().String(),
+	})
+
+	req, _ := http.NewRequest(http.MethodGet, "https://example.com/v1beta/models", nil)
+	resp, _ := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+
+	select {
+	case line := <-firstLineCh:
+		if line != "CONNECT example.com:443 HTTP/1.1" {
+			t.Fatalf("proxy received first line %q, want HTTPS CONNECT", line)
+		}
+	case err := <-errCh:
+		t.Fatalf("proxy failed before receiving request: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not receive an HTTPS CONNECT request")
 	}
 }
 
