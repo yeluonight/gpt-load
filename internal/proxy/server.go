@@ -116,7 +116,7 @@ func (ps *ProxyServer) HandleProxy(c *gin.Context) {
 
 	isStream := channelHandler.IsStreamRequest(c, bodyBytes)
 
-	ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, finalBodyBytes, isStream, startTime, 0)
+	ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, finalBodyBytes, isStream, startTime, 0, 0)
 }
 
 // executeRequestWithRetry is the core recursive function for handling requests and retries.
@@ -129,6 +129,7 @@ func (ps *ProxyServer) executeRequestWithRetry(
 	isStream bool,
 	startTime time.Time,
 	retryCount int,
+	proxyRetryCount int,
 ) {
 	cfg := group.EffectiveConfig
 
@@ -265,15 +266,31 @@ func (ps *ProxyServer) executeRequestWithRetry(
 		if err != nil && proxySelection.FromPool && proxypool.IsProxyTransportError(err, proxySelection.URL) {
 			usageReservation.Release()
 			ps.proxyPool.MarkFailure(group.ID, apiKey.ID, proxySelection.URL, proxySelection.CooldownSeconds)
-			ps.logRequest(c, originalGroup, group, apiKey, startTime, statusCode, errors.New(parsedError), isStream, upstreamURL, channelHandler, finalBodyBytes, models.RequestTypeRetry)
-			ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, bodyBytes, isStream, startTime, retryCount)
+			requestType := models.RequestTypeRetry
+			if proxyRetryCount+1 >= proxyPoolRequestAttempts(group) {
+				requestType = models.RequestTypeFinal
+			}
+			ps.logRequest(c, originalGroup, group, apiKey, startTime, statusCode, errors.New(parsedError), isStream, upstreamURL, channelHandler, finalBodyBytes, requestType)
+			if requestType == models.RequestTypeFinal {
+				response.Error(c, app_errors.NewAPIErrorWithUpstream(http.StatusServiceUnavailable, "PROXY_POOL_UNAVAILABLE", fmt.Sprintf("all proxy pool entries failed: %s", parsedError)))
+				return
+			}
+			ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, bodyBytes, isStream, startTime, retryCount, proxyRetryCount+1)
 			return
 		}
 		if err == nil && proxySelection.FromPool && isProxyPoolRecoverableUpstreamStatus(statusCode, parsedError) {
 			usageReservation.Release()
 			ps.proxyPool.MarkFailure(group.ID, apiKey.ID, proxySelection.URL, proxySelection.CooldownSeconds)
-			ps.logRequest(c, originalGroup, group, apiKey, startTime, statusCode, errors.New(parsedError), isStream, upstreamURL, channelHandler, finalBodyBytes, models.RequestTypeRetry)
-			ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, bodyBytes, isStream, startTime, retryCount)
+			requestType := models.RequestTypeRetry
+			if proxyRetryCount+1 >= proxyPoolRequestAttempts(group) {
+				requestType = models.RequestTypeFinal
+			}
+			ps.logRequest(c, originalGroup, group, apiKey, startTime, statusCode, errors.New(parsedError), isStream, upstreamURL, channelHandler, finalBodyBytes, requestType)
+			if requestType == models.RequestTypeFinal {
+				response.Error(c, app_errors.NewAPIErrorWithUpstream(http.StatusServiceUnavailable, "PROXY_POOL_UNAVAILABLE", fmt.Sprintf("all proxy pool entries failed: %s", parsedError)))
+				return
+			}
+			ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, bodyBytes, isStream, startTime, retryCount, proxyRetryCount+1)
 			return
 		}
 
@@ -300,7 +317,7 @@ func (ps *ProxyServer) executeRequestWithRetry(
 			return
 		}
 
-		ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, bodyBytes, isStream, startTime, retryCount+1)
+		ps.executeRequestWithRetry(c, channelHandler, originalGroup, group, bodyBytes, isStream, startTime, retryCount+1, proxyRetryCount)
 		return
 	}
 
@@ -330,6 +347,18 @@ func (ps *ProxyServer) executeRequestWithRetry(
 
 func isProxyPoolRecoverableUpstreamStatus(statusCode int, parsedError string) bool {
 	return statusCode >= 400 && proxypool.IsRecoverableErrorMessage(parsedError)
+}
+
+func proxyPoolRequestAttempts(group *models.Group) int {
+	groupConfig, err := models.DecodeGroupConfig(group.Config)
+	if err != nil || groupConfig.ProxyPool == nil {
+		return 1
+	}
+	attempts := len(groupConfig.ProxyPool.SelectableEntries())
+	if attempts <= 0 {
+		return 1
+	}
+	return attempts
 }
 
 func shouldFailoverOnStatusCode(statusCode int, group *models.Group) bool {

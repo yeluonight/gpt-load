@@ -68,48 +68,43 @@ func (s *KeyValidator) ValidateSingleKey(key *models.APIKey, group *models.Group
 		return false, fmt.Errorf("failed to get channel for group %s: %w", group.Name, err)
 	}
 
-	var lastProxyErr error
-	for attempt := 0; attempt < proxyPoolValidationAttempts(group); attempt++ {
-		client := ch.GetHTTPClient()
-		proxySelection, proxyErr := s.proxyPool.Select(group, key.ID)
-		if proxyErr != nil {
-			return false, proxyErr
-		}
-		if proxySelection.FromPool {
-			client = s.channelFactory.GetClientForGroup(group, proxySelection.URL, false)
-		}
+	if entries, cooldownSeconds, ok, err := proxyPoolValidationEntries(group); err != nil {
+		return false, err
+	} else if ok {
+		return s.validateSingleKeyWithProxyPool(ctx, ch, key, group, entries, cooldownSeconds)
+	}
 
+	return s.validateSingleKeyWithClient(ctx, ch, key, group, ch.GetHTTPClient())
+}
+
+func (s *KeyValidator) validateSingleKeyWithProxyPool(
+	ctx context.Context,
+	ch channel.ChannelProxy,
+	key *models.APIKey,
+	group *models.Group,
+	entries []models.ProxyPoolItem,
+	cooldownSeconds int,
+) (bool, error) {
+	var lastProxyErr error
+	for _, entry := range entries {
+		client := s.channelFactory.GetClientForGroup(group, entry.URL, false)
 		isValid, validationErr := validateKeyWithClient(ctx, ch, key, group, client)
-		if validationErr == nil && proxySelection.FromPool {
-			s.proxyPool.MarkSuccess(group.ID, proxySelection.URL)
+		if validationErr == nil {
+			s.proxyPool.MarkSuccess(group.ID, entry.URL)
 		}
-		if validationErr != nil && proxySelection.FromPool && isValidationProxyError(validationErr, proxySelection.URL) {
-			s.proxyPool.MarkFailure(group.ID, key.ID, proxySelection.URL, proxySelection.CooldownSeconds)
+		if validationErr != nil && isValidationProxyError(validationErr, entry.URL) {
+			s.proxyPool.MarkFailure(group.ID, key.ID, entry.URL, cooldownSeconds)
 			lastProxyErr = validationErr
+			logrus.WithFields(logrus.Fields{
+				"error":     validationErr,
+				"key_id":    key.ID,
+				"group_id":  group.ID,
+				"proxy_url": entry.URL,
+			}).Debug("Key validation proxy failed, trying next proxy pool entry")
 			continue
 		}
 
-		var errorMsg string
-		if !isValid && validationErr != nil {
-			errorMsg = validationErr.Error()
-		}
-		s.keypoolProvider.UpdateStatus(key, group, isValid, errorMsg)
-
-		if !isValid {
-			logrus.WithFields(logrus.Fields{
-				"error":    validationErr,
-				"key_id":   key.ID,
-				"group_id": group.ID,
-			}).Debug("Key validation failed")
-			return false, validationErr
-		}
-
-		logrus.WithFields(logrus.Fields{
-			"key_id":   key.ID,
-			"is_valid": isValid,
-		}).Debug("Key validation successful")
-
-		return true, nil
+		return s.finishValidation(key, group, isValid, validationErr)
 	}
 
 	if lastProxyErr != nil {
@@ -121,8 +116,39 @@ func (s *KeyValidator) ValidateSingleKey(key *models.APIKey, group *models.Group
 		return false, fmt.Errorf("all proxy pool entries failed validation: %w", lastProxyErr)
 	}
 
+	return false, fmt.Errorf("no enabled proxy in group proxy pool")
+}
+
+func (s *KeyValidator) validateSingleKeyWithClient(
+	ctx context.Context,
+	ch channel.ChannelProxy,
+	key *models.APIKey,
+	group *models.Group,
+	client *http.Client,
+) (bool, error) {
+	isValid, validationErr := validateKeyWithClient(ctx, ch, key, group, client)
+	return s.finishValidation(key, group, isValid, validationErr)
+}
+
+func (s *KeyValidator) finishValidation(key *models.APIKey, group *models.Group, isValid bool, validationErr error) (bool, error) {
+	var errorMsg string
+	if !isValid && validationErr != nil {
+		errorMsg = validationErr.Error()
+	}
+	s.keypoolProvider.UpdateStatus(key, group, isValid, errorMsg)
+
+	if !isValid {
+		logrus.WithFields(logrus.Fields{
+			"error":    validationErr,
+			"key_id":   key.ID,
+			"group_id": group.ID,
+		}).Debug("Key validation failed")
+		return false, validationErr
+	}
+
 	logrus.WithFields(logrus.Fields{
-		"key_id": key.ID,
+		"key_id":   key.ID,
+		"is_valid": isValid,
 	}).Debug("Key validation successful")
 
 	return true, nil
@@ -139,15 +165,23 @@ func isValidationProxyError(err error, proxyURL string) bool {
 	return proxypool.IsProxyTransportError(err, proxyURL) || proxypool.IsRecoverableErrorMessage(err.Error())
 }
 
-func proxyPoolValidationAttempts(group *models.Group) int {
+func proxyPoolValidationEntries(group *models.Group) ([]models.ProxyPoolItem, int, bool, error) {
 	groupConfig, err := models.DecodeGroupConfig(group.Config)
 	if err != nil || groupConfig.ProxyPool == nil || len(groupConfig.ProxyPool.Entries()) == 0 {
-		return 1
+		return nil, 0, false, err
 	}
-	if selectable := len(groupConfig.ProxyPool.SelectableEntries()); selectable > 0 {
-		return selectable
+	entries := groupConfig.ProxyPool.SelectableEntries()
+	if len(entries) == 0 {
+		return nil, 0, true, nil
 	}
-	return 1
+	cooldownSeconds := groupConfig.ProxyPool.AutoEnableIntervalSeconds
+	if cooldownSeconds <= 0 {
+		cooldownSeconds = groupConfig.ProxyPool.CooldownSeconds
+	}
+	if cooldownSeconds <= 0 {
+		cooldownSeconds = 60
+	}
+	return entries, cooldownSeconds, true, nil
 }
 
 // TestMultipleKeys performs a synchronous validation for a list of key values within a specific group.
