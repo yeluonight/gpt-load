@@ -61,14 +61,21 @@ func (gm *GroupManager) Initialize() error {
 			subGroupsByAggregateID[sg.GroupID] = append(subGroupsByAggregateID[sg.GroupID], sg)
 		}
 
-		// Create group ID to group object mapping for sub-group lookups
+		// Create group ID to group object mapping for enabled sub-group lookups.
 		groupByID := make(map[uint]*models.Group)
 		for _, group := range groups {
+			if group.Disabled {
+				continue
+			}
 			groupByID[group.ID] = group
 		}
 
 		groupMap := make(map[string]*models.Group, len(groups))
 		for _, group := range groups {
+			if group.Disabled {
+				logrus.WithField("group_name", group.Name).Debug("Skipped disabled group during runtime cache load")
+				continue
+			}
 			g := *group
 			g.EffectiveConfig = gm.settingsManager.GetEffectiveConfig(g.Config)
 			g.ProxyKeysMap = utils.StringToSet(g.ProxyKeys, ",")
@@ -119,12 +126,13 @@ func (gm *GroupManager) Initialize() error {
 			// Load sub-groups for aggregate groups
 			if g.GroupType == "aggregate" {
 				if subGroups, ok := subGroupsByAggregateID[g.ID]; ok {
-					g.SubGroups = make([]models.GroupSubGroup, len(subGroups))
-					for i, sg := range subGroups {
-						g.SubGroups[i] = sg
-						if subGroup, exists := groupByID[sg.SubGroupID]; exists {
-							g.SubGroups[i].SubGroupName = subGroup.Name
+					g.SubGroups = make([]models.GroupSubGroup, 0, len(subGroups))
+					for _, sg := range subGroups {
+						if _, exists := groupByID[sg.SubGroupID]; !exists {
+							continue
 						}
+						sg.SubGroupName = groupByID[sg.SubGroupID].Name
+						g.SubGroups = append(g.SubGroups, sg)
 					}
 				}
 			}

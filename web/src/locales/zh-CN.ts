@@ -358,6 +358,9 @@ export default {
     proxyAutoEnableInterval: "不通自动启用间隔(秒)",
     proxyAutoEnableIntervalTooltip:
       "代理因明确代理连接错误或地区不可用被自动跳过后，等待多久再自动参与选择。长期禁用的代理不会自动启用。",
+    groupDisabled: "禁用分组",
+    groupDisabledTooltip:
+      "禁用后该分组不会加载到运行时缓存，也不会加载 Key 到内存/Redis；代理入口将无法调用该分组。重新启用后会从数据库重新加载。",
     groupConfig: "分组配置",
     groupConfigTooltip:
       "针对此分组的专用配置参数，如超时时间、重试次数等。这些配置会覆盖全局默认设置",

@@ -370,6 +370,9 @@ export default {
     proxyAutoEnableInterval: "自動再有効化秒数",
     proxyAutoEnableIntervalTooltip:
       "自動的にスキップされたプロキシが再び選択可能になるまでの秒数です。長期無効のプロキシは自動有効化されません。",
+    groupDisabled: "グループ無効化",
+    groupDisabledTooltip:
+      "無効化されたグループは実行時キャッシュに読み込まれず、キーもメモリ/Redisに読み込まれません。再有効化するまでプロキシエンドポイントでは使用できません。",
     groupConfig: "グループ設定",
     groupConfigTooltip:
       "タイムアウト、リトライ回数などのグループ固有の設定パラメーター。これらの設定はグローバルデフォルトを上書きします",

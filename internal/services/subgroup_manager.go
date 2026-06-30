@@ -112,6 +112,9 @@ func (m *SubGroupManager) createSelector(group *models.Group) *selector {
 
 	var items []subGroupItem
 	for _, sg := range group.SubGroups {
+		if sg.SubGroupName == "" || sg.Weight <= 0 {
+			continue
+		}
 		items = append(items, subGroupItem{
 			name:          sg.SubGroupName,
 			subGroupID:    sg.SubGroupID,

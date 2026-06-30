@@ -369,6 +369,7 @@ function handleDragEnd() {
               :class="{
                 active: selectedGroup?.id === group.id,
                 aggregate: group.group_type === 'aggregate',
+                disabled: group.disabled,
                 dragging: draggingGroupId === group.id,
                 'drop-before':
                   dropTarget?.groupId === group.id &&
@@ -413,6 +414,9 @@ function handleDragEnd() {
                   </n-tag>
                   <n-tag v-if="group.group_type === 'aggregate'" size="tiny" type="warning" round>
                     {{ t("keys.aggregateGroup") }}
+                  </n-tag>
+                  <n-tag v-if="group.disabled" size="tiny" type="error" round>
+                    {{ t("keys.groupDisabled") }}
                   </n-tag>
                   <span v-if="group.group_type !== 'aggregate'" class="group-id">
                     #{{ group.name }}
@@ -519,6 +523,10 @@ function handleDragEnd() {
 
 .group-item.dragging {
   opacity: 0.6;
+}
+
+.group-item.disabled {
+  opacity: 0.62;
 }
 
 .group-item.drop-before::before,

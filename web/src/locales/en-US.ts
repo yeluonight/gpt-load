@@ -370,6 +370,9 @@ export default {
     proxyAutoEnableInterval: "Auto re-enable seconds",
     proxyAutoEnableIntervalTooltip:
       "How long an automatically skipped proxy waits before it can be selected again. Long-term disabled proxies are never auto-enabled.",
+    groupDisabled: "Disable group",
+    groupDisabledTooltip:
+      "Disabled groups are not loaded into runtime cache and their keys are not loaded into memory/Redis. The proxy endpoint will not serve the group until it is enabled again.",
     groupConfig: "Group Configuration",
     groupConfigTooltip:
       "Group-specific configuration parameters like timeout, retry count, etc. These settings override global defaults",

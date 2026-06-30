@@ -66,6 +66,41 @@ func TestStripSensitiveOnCrossHostRedirect(t *testing.T) {
 	}
 }
 
+func TestExplicitInvalidProxyDoesNotFallbackToEnvironment(t *testing.T) {
+	proxyHit := false
+	envProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHit = true
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	defer envProxy.Close()
+	t.Setenv("HTTP_PROXY", envProxy.URL)
+	t.Setenv("HTTPS_PROXY", envProxy.URL)
+	t.Setenv("NO_PROXY", "")
+
+	manager := NewHTTPClientManager()
+	client := manager.GetClient(&Config{
+		ConnectTimeout:        100000000,
+		RequestTimeout:        100000000,
+		IdleConnTimeout:       100000000,
+		MaxIdleConns:          1,
+		MaxIdleConnsPerHost:   1,
+		ResponseHeaderTimeout: 100000000,
+		ProxyURL:              "://bad-proxy-url",
+	})
+
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	resp, err := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("expected invalid explicit proxy to fail")
+	}
+	if proxyHit {
+		t.Fatal("request fell back to environment proxy despite explicit proxy config")
+	}
+}
+
 // TestSensitiveHeadersPreservedSameHost asserts the policy does NOT strip the
 // credential header on a same-host redirect (legitimate behavior must survive).
 func TestSensitiveHeadersPreservedSameHost(t *testing.T) {

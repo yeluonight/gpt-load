@@ -89,8 +89,10 @@ func (m *HTTPClientManager) GetClient(config *Config) *http.Client {
 	if config.ProxyURL != "" {
 		proxyURL, err := url.Parse(config.ProxyURL)
 		if err != nil {
-			logrus.Warnf("Invalid proxy URL '%s' provided, falling back to environment settings: %v", config.ProxyURL, err)
-			transport.Proxy = http.ProxyFromEnvironment
+			logrus.Warnf("Invalid proxy URL '%s' provided; refusing to fall back to environment proxy: %v", config.ProxyURL, err)
+			transport.Proxy = func(*http.Request) (*url.URL, error) {
+				return nil, fmt.Errorf("invalid proxy URL %q: %w", config.ProxyURL, err)
+			}
 		} else {
 			transport.Proxy = http.ProxyURL(proxyURL)
 		}

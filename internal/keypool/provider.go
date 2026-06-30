@@ -258,41 +258,52 @@ func (p *KeyProvider) LoadKeysFromDB() error {
 
 	// 1. 分批从数据库加载并使用 Pipeline 写入 Redis
 	allActiveKeyIDs := make(map[uint][]any)
+	var enabledGroupIDs []uint
+	if err := p.db.Model(&models.Group{}).Where("disabled = ?", false).Pluck("id", &enabledGroupIDs).Error; err != nil {
+		return fmt.Errorf("failed to load enabled group ids: %w", err)
+	}
+	if len(enabledGroupIDs) == 0 {
+		logrus.Info("No enabled groups found; skipping API key cache load.")
+		return nil
+	}
+
 	batchSize := 10000
 	var batchKeys []*models.APIKey
 
-	err := p.db.Model(&models.APIKey{}).FindInBatches(&batchKeys, batchSize, func(tx *gorm.DB, batch int) error {
-		logrus.Debugf("Processing batch %d with %d keys...", batch, len(batchKeys))
+	err := p.db.Model(&models.APIKey{}).
+		Where("group_id IN ?", enabledGroupIDs).
+		FindInBatches(&batchKeys, batchSize, func(tx *gorm.DB, batch int) error {
+			logrus.Debugf("Processing batch %d with %d keys...", batch, len(batchKeys))
 
-		var pipeline store.Pipeliner
-		if redisStore, ok := p.store.(store.RedisPipeliner); ok {
-			pipeline = redisStore.Pipeline()
-		}
+			var pipeline store.Pipeliner
+			if redisStore, ok := p.store.(store.RedisPipeliner); ok {
+				pipeline = redisStore.Pipeline()
+			}
 
-		for _, key := range batchKeys {
-			keyHashKey := fmt.Sprintf("key:%d", key.ID)
-			keyDetails := p.apiKeyToMap(key)
+			for _, key := range batchKeys {
+				keyHashKey := fmt.Sprintf("key:%d", key.ID)
+				keyDetails := p.apiKeyToMap(key)
 
-			if pipeline != nil {
-				pipeline.HSet(keyHashKey, keyDetails)
-			} else {
-				if err := p.store.HSet(keyHashKey, keyDetails); err != nil {
-					logrus.WithFields(logrus.Fields{"keyID": key.ID, "error": err}).Error("Failed to HSet key details")
+				if pipeline != nil {
+					pipeline.HSet(keyHashKey, keyDetails)
+				} else {
+					if err := p.store.HSet(keyHashKey, keyDetails); err != nil {
+						logrus.WithFields(logrus.Fields{"keyID": key.ID, "error": err}).Error("Failed to HSet key details")
+					}
+				}
+
+				if key.Status == models.KeyStatusActive {
+					allActiveKeyIDs[key.GroupID] = append(allActiveKeyIDs[key.GroupID], key.ID)
 				}
 			}
 
-			if key.Status == models.KeyStatusActive {
-				allActiveKeyIDs[key.GroupID] = append(allActiveKeyIDs[key.GroupID], key.ID)
+			if pipeline != nil {
+				if err := pipeline.Exec(); err != nil {
+					return fmt.Errorf("failed to execute pipeline for batch %d: %w", batch, err)
+				}
 			}
-		}
-
-		if pipeline != nil {
-			if err := pipeline.Exec(); err != nil {
-				return fmt.Errorf("failed to execute pipeline for batch %d: %w", batch, err)
-			}
-		}
-		return nil
-	}).Error
+			return nil
+		}).Error
 
 	if err != nil {
 		return fmt.Errorf("failed during batch processing of keys: %w", err)
@@ -310,6 +321,54 @@ func (p *KeyProvider) LoadKeysFromDB() error {
 		}
 	}
 
+	return nil
+}
+
+// LoadGroupKeysFromDB reloads one enabled group's keys into the in-memory store.
+func (p *KeyProvider) LoadGroupKeysFromDB(groupID uint) error {
+	if groupID == 0 {
+		return nil
+	}
+
+	var group models.Group
+	if err := p.db.Select("id", "disabled").First(&group, groupID).Error; err != nil {
+		return fmt.Errorf("failed to load group %d: %w", groupID, err)
+	}
+	if group.Disabled {
+		return p.RemoveGroupKeysFromStore(groupID)
+	}
+
+	var keys []models.APIKey
+	if err := p.db.Where("group_id = ?", groupID).Find(&keys).Error; err != nil {
+		return fmt.Errorf("failed to load keys for group %d: %w", groupID, err)
+	}
+
+	if err := p.RemoveGroupKeysFromStore(groupID); err != nil {
+		return err
+	}
+	for i := range keys {
+		if err := p.addKeyToStore(&keys[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveGroupKeysFromStore removes every cached key entry for a group without touching DB rows.
+func (p *KeyProvider) RemoveGroupKeysFromStore(groupID uint) error {
+	if groupID == 0 {
+		return nil
+	}
+
+	var keys []models.APIKey
+	if err := p.db.Select("id", "group_id").Where("group_id = ?", groupID).Find(&keys).Error; err != nil {
+		return fmt.Errorf("failed to load key ids for group %d: %w", groupID, err)
+	}
+	keyIDs := pluckIDs(keys)
+	if err := p.RemoveKeysFromStore(groupID, keyIDs); err != nil {
+		return err
+	}
+	p.clearProxyAffinity(groupID)
 	return nil
 }
 
@@ -544,19 +603,20 @@ func (p *KeyProvider) removeKeysByStatus(groupID uint, status ...string) (int64,
 // RemoveKeysFromStore 直接从内存存储中移除指定的键，不涉及数据库操作
 // 这个方法适用于数据库已经删除但需要清理内存存储的场景
 func (p *KeyProvider) RemoveKeysFromStore(groupID uint, keyIDs []uint) error {
-	if len(keyIDs) == 0 {
-		return nil
-	}
-
 	activeKeysListKey := fmt.Sprintf("group:%d:active_keys", groupID)
 
-	// 第一步：直接删除整个 active_keys 列表
+	// 第一步：直接删除整个 active_keys 列表，即使没有 key id 也要清掉旧缓存。
 	if err := p.store.Delete(activeKeysListKey); err != nil {
 		logrus.WithFields(logrus.Fields{
 			"groupID": groupID,
 			"error":   err,
 		}).Error("Failed to delete active keys list")
 		return err
+	}
+
+	if len(keyIDs) == 0 {
+		p.clearProxyAffinity(groupID)
+		return nil
 	}
 
 	// 第二步：批量删除所有相关的key hash
@@ -582,6 +642,14 @@ func (p *KeyProvider) RemoveKeysFromStore(groupID uint, keyIDs []uint) error {
 
 // addKeyToStore is a helper to add a single key to the cache.
 func (p *KeyProvider) addKeyToStore(key *models.APIKey) error {
+	disabled, err := p.isGroupDisabled(key.GroupID)
+	if err != nil {
+		return err
+	}
+	if disabled {
+		return nil
+	}
+
 	// 1. Store key details in HASH
 	keyHashKey := fmt.Sprintf("key:%d", key.ID)
 	keyDetails := p.apiKeyToMap(key)
@@ -606,6 +674,13 @@ func (p *KeyProvider) addKeyToStore(key *models.APIKey) error {
 func (p *KeyProvider) addKeysToCacheBatch(groupID uint, keys []models.APIKey) error {
 	if len(keys) == 0 {
 		return nil
+	}
+	disabled, err := p.isGroupDisabled(groupID)
+	if err != nil {
+		return err
+	}
+	if disabled {
+		return p.RemoveGroupKeysFromStore(groupID)
 	}
 
 	// 1. 批量 HSet 密钥详情
@@ -668,6 +743,14 @@ func (p *KeyProvider) apiKeyToMap(key *models.APIKey) map[string]any {
 		"group_id":      key.GroupID,
 		"created_at":    key.CreatedAt.Unix(),
 	}
+}
+
+func (p *KeyProvider) isGroupDisabled(groupID uint) (bool, error) {
+	var group models.Group
+	if err := p.db.Select("id", "disabled").First(&group, groupID).Error; err != nil {
+		return false, fmt.Errorf("failed to load group %d: %w", groupID, err)
+	}
+	return group.Disabled, nil
 }
 
 // pluckIDs extracts IDs from a slice of APIKey.

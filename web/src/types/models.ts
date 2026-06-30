@@ -67,6 +67,7 @@ export interface Group {
   name: string;
   display_name: string;
   description: string;
+  disabled: boolean;
   sort: number;
   test_model: string;
   channel_type: ChannelType;

@@ -16,6 +16,8 @@ Compatibility: except for the Docker image path changing to `ghcr.io/yeluonight/
 - **Independent key total quota**: each key can have a separate total request limit per reset window, independent from per-model quotas.
 - **Pacific Time reset windows**: daily reset times are evaluated in PT (`America/Los_Angeles`); interval reset windows are also supported.
 - **Group proxy pool**: configure multiple outbound proxies directly on a group. The pool keeps key-to-proxy affinity where possible, spreads concurrent keys across proxy exits, and switches proxies on transport or unsupported-location errors.
+- **Proxy escape prevention**: explicit proxy settings no longer silently fall back to environment proxies when the proxy URL is invalid; proxy pools take priority over legacy `proxy_url`.
+- **Disable groups**: groups can be disabled in the WebUI; disabled groups are not loaded into runtime cache and their keys are not loaded into memory/Redis.
 - **Proxy observability**: request logs include the actual outbound proxy used by each downstream request.
 - **Gemini model list fix**: Gemini groups map OpenAI-style `/v1/models` model-list requests to Gemini's official native `/v1beta/models?key=...` endpoint.
 - **GHCR image**: Docker images are published as `ghcr.io/yeluonight/gpt-load`.
@@ -326,7 +328,8 @@ All fields below are optional group configuration fields. Existing configuration
 - `model_rate_limits`: `model` supports exact model names, and `*` acts as the default limit. `rpm` is requests per minute, `tpm` is tokens per minute. Enter TPM as a plain number, for example `250000`, not `250k`. `request_limit` limits how many times each key may call that model in one reset window.
 - `key_request_limit`: Limits each key's total request count, counted independently from `model_rate_limits[].request_limit`.
 - Reset policy: `reset_mode` supports `interval` and `daily`; `interval` uses `interval_minutes`, while `daily` uses `reset_time`. Time accepts `HH:MM` or `HH:MM:SS`. Daily reset times are evaluated in Pacific Time (PT, `America/Los_Angeles`).
-- `proxy_pool`: accepts an object, string array, or newline/comma-separated string. Legacy `proxies` remains compatible; the WebUI now uses `items` to manage per-proxy test results, notes, manual disable state, and long-term disable state. When configured, it takes priority over the normal `proxy_url` setting. Only clear proxy connection errors or upstream unsupported-location errors temporarily skip a proxy; ordinary upstream/key timeouts do not mark a proxy unavailable. `auto_enable_interval_seconds` controls when automatically skipped proxies rejoin selection, while long-term disabled proxies never auto-enable.
+- `proxy_pool`: accepts an object, string array, or newline/comma-separated string. Legacy `proxies` remains compatible; the WebUI now uses `items` to manage per-proxy test results, notes, manual disable state, and long-term disable state. When configured, it takes priority over the normal `proxy_url` setting. Only clear proxy connection errors or upstream unsupported-location errors temporarily skip a proxy; ordinary upstream/key timeouts do not mark a proxy unavailable. `auto_enable_interval_seconds` controls when automatically skipped proxies rejoin selection, while long-term disabled proxies never auto-enable. Invalid explicit proxy URLs fail the request instead of falling back to environment proxies.
+- `disabled`: disables a group. Disabled groups are excluded from runtime group cache and their keys are not written to memory/Redis; enabling the group reloads keys from the database.
 
 ## Data Encryption Migration
 

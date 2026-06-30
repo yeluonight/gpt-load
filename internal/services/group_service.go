@@ -91,6 +91,7 @@ type GroupCreateParams struct {
 	Name                string
 	DisplayName         string
 	Description         string
+	Disabled            bool
 	GroupType           string
 	Upstreams           json.RawMessage
 	ChannelType         string
@@ -111,6 +112,7 @@ type GroupUpdateParams struct {
 	Name                *string
 	DisplayName         *string
 	Description         *string
+	Disabled            *bool
 	GroupType           *string
 	Upstreams           json.RawMessage
 	HasUpstreams        bool
@@ -238,6 +240,7 @@ func (s *GroupService) CreateGroup(ctx context.Context, params GroupCreateParams
 		Name:                name,
 		DisplayName:         strings.TrimSpace(params.DisplayName),
 		Description:         strings.TrimSpace(params.Description),
+		Disabled:            params.Disabled,
 		GroupType:           groupType,
 		Upstreams:           cleanedUpstreams,
 		ChannelType:         channelType,
@@ -378,6 +381,11 @@ func (s *GroupService) UpdateGroup(ctx context.Context, id uint, params GroupUpd
 		group.Description = strings.TrimSpace(*params.Description)
 	}
 
+	wasDisabled := group.Disabled
+	if params.Disabled != nil {
+		group.Disabled = *params.Disabled
+	}
+
 	if params.HasUpstreams {
 		cleanedUpstreams, err := s.validateAndCleanUpstreams(params.Upstreams)
 		if err != nil {
@@ -497,6 +505,18 @@ func (s *GroupService) UpdateGroup(ctx context.Context, id uint, params GroupUpd
 
 	if err := s.groupManager.Invalidate(); err != nil {
 		logrus.WithContext(ctx).WithError(err).Error("failed to invalidate group cache")
+	}
+
+	if wasDisabled != group.Disabled {
+		if group.Disabled {
+			if err := s.keyService.KeyProvider.RemoveGroupKeysFromStore(group.ID); err != nil {
+				logrus.WithContext(ctx).WithError(err).WithField("group_id", group.ID).Error("failed to remove disabled group keys from cache")
+			}
+		} else {
+			if err := s.keyService.KeyProvider.LoadGroupKeysFromDB(group.ID); err != nil {
+				logrus.WithContext(ctx).WithError(err).WithField("group_id", group.ID).Error("failed to reload enabled group keys into cache")
+			}
+		}
 	}
 
 	return &group, nil

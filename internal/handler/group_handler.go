@@ -54,6 +54,7 @@ type GroupCreateRequest struct {
 	Name                string              `json:"name"`
 	DisplayName         string              `json:"display_name"`
 	Description         string              `json:"description"`
+	Disabled            bool                `json:"disabled"`
 	GroupType           string              `json:"group_type"` // 'standard' or 'aggregate'
 	Upstreams           json.RawMessage     `json:"upstreams"`
 	ChannelType         string              `json:"channel_type"`
@@ -80,6 +81,7 @@ func (s *Server) CreateGroup(c *gin.Context) {
 		Name:                req.Name,
 		DisplayName:         req.DisplayName,
 		Description:         req.Description,
+		Disabled:            req.Disabled,
 		GroupType:           req.GroupType,
 		Upstreams:           req.Upstreams,
 		ChannelType:         req.ChannelType,
@@ -123,6 +125,7 @@ type GroupUpdateRequest struct {
 	Name                *string             `json:"name,omitempty"`
 	DisplayName         *string             `json:"display_name,omitempty"`
 	Description         *string             `json:"description,omitempty"`
+	Disabled            *bool               `json:"disabled,omitempty"`
 	GroupType           *string             `json:"group_type,omitempty"`
 	Upstreams           json.RawMessage     `json:"upstreams"`
 	ChannelType         *string             `json:"channel_type,omitempty"`
@@ -269,6 +272,7 @@ func (s *Server) UpdateGroup(c *gin.Context) {
 		Name:                req.Name,
 		DisplayName:         req.DisplayName,
 		Description:         req.Description,
+		Disabled:            req.Disabled,
 		GroupType:           req.GroupType,
 		ChannelType:         req.ChannelType,
 		Sort:                req.Sort,
@@ -337,6 +341,7 @@ type GroupResponse struct {
 	Endpoint            string              `json:"endpoint"`
 	DisplayName         string              `json:"display_name"`
 	Description         string              `json:"description"`
+	Disabled            bool                `json:"disabled"`
 	GroupType           string              `json:"group_type"`
 	Upstreams           datatypes.JSON      `json:"upstreams"`
 	ChannelType         string              `json:"channel_type"`
@@ -381,6 +386,7 @@ func (s *Server) newGroupResponse(group *models.Group) *GroupResponse {
 		Endpoint:            endpoint,
 		DisplayName:         group.DisplayName,
 		Description:         group.Description,
+		Disabled:            group.Disabled,
 		GroupType:           group.GroupType,
 		Upstreams:           group.Upstreams,
 		ChannelType:         group.ChannelType,

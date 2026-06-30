@@ -104,6 +104,7 @@ interface GroupFormData {
   name: string;
   display_name: string;
   description: string;
+  disabled: boolean;
   upstreams: UpstreamInfo[];
   channel_type: "anthropic" | "gemini" | "openai" | "openai-response";
   sort: number;
@@ -130,6 +131,7 @@ const formData = reactive<GroupFormData>({
   name: "",
   display_name: "",
   description: "",
+  disabled: false,
   upstreams: [
     {
       url: "",
@@ -342,6 +344,7 @@ function resetForm() {
     name: "",
     display_name: "",
     description: "",
+    disabled: false,
     upstreams: [
       {
         url: isCreateMode ? upstreamPlaceholder.value : "",
@@ -403,6 +406,7 @@ function loadGroupData() {
     name: props.group.name || "",
     display_name: props.group.display_name || "",
     description: props.group.description || "",
+    disabled: props.group.disabled === true,
     upstreams: props.group.upstreams?.length
       ? [...props.group.upstreams]
       : [{ url: "", weight: 1 }],
@@ -927,6 +931,7 @@ async function handleSubmit() {
       name: formData.name,
       display_name: formData.display_name,
       description: formData.description,
+      disabled: formData.disabled,
       upstreams: formData.upstreams.filter((upstream: UpstreamInfo) => upstream.url.trim()),
       channel_type: formData.channel_type,
       sort: formData.sort,
@@ -1072,6 +1077,21 @@ async function handleSubmit() {
               />
             </n-form-item>
           </div>
+
+          <n-form-item :label="t('keys.groupDisabled')" path="disabled">
+            <template #label>
+              <div class="form-label-with-tooltip">
+                {{ t("keys.groupDisabled") }}
+                <n-tooltip trigger="hover" placement="top">
+                  <template #trigger>
+                    <n-icon :component="HelpCircleOutline" class="help-icon" />
+                  </template>
+                  {{ t("keys.groupDisabledTooltip") }}
+                </n-tooltip>
+              </div>
+            </template>
+            <n-switch v-model:value="formData.disabled" />
+          </n-form-item>
 
           <!-- Test model and test path on the same row -->
           <div class="form-row">
