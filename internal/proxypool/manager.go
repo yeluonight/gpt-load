@@ -28,6 +28,10 @@ func NewManager() *Manager {
 }
 
 func (m *Manager) Select(group *models.Group, keyID uint) (Selection, error) {
+	return m.SelectExcluding(group, keyID, nil)
+}
+
+func (m *Manager) SelectExcluding(group *models.Group, keyID uint, excluded map[string]struct{}) (Selection, error) {
 	if group == nil {
 		return Selection{}, fmt.Errorf("group is nil")
 	}
@@ -64,6 +68,9 @@ func (m *Manager) Select(group *models.Group, keyID uint) (Selection, error) {
 	for _, entry := range selectableEntries {
 		proxyURL := entry.URL
 		currentProxySet[proxyURL] = struct{}{}
+		if _, skipped := excluded[proxyURL]; skipped {
+			continue
+		}
 		if until, blocked := m.unavailable[proxyStateKey(group.ID, proxyURL)]; blocked {
 			if now.Before(until) {
 				cooling = append(cooling, proxyURL)
@@ -76,6 +83,9 @@ func (m *Manager) Select(group *models.Group, keyID uint) (Selection, error) {
 
 	if len(available) == 0 {
 		if len(cooling) == 0 {
+			if len(excluded) > 0 {
+				return Selection{}, fmt.Errorf("no untried available proxy in group proxy pool")
+			}
 			return Selection{}, fmt.Errorf("no available proxy in group proxy pool")
 		}
 		// If every enabled proxy is in temporary cooldown, probe one early instead

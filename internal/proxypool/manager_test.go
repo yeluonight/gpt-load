@@ -173,6 +173,50 @@ func TestProxyPoolReprobesWhenAllEnabledProxiesAreCooling(t *testing.T) {
 	}
 }
 
+func TestProxyPoolSelectExcludingDoesNotRepeatTriedProxy(t *testing.T) {
+	manager := NewManager()
+	group := &models.Group{
+		ID: 1,
+		Config: datatypes.JSONMap{
+			"proxy_pool": map[string]any{
+				"proxies": []any{
+					"http://127.0.0.1:1001",
+					"http://127.0.0.1:1002",
+					"http://127.0.0.1:1003",
+				},
+			},
+		},
+	}
+
+	first, err := manager.SelectExcluding(group, 1, nil)
+	if err != nil {
+		t.Fatalf("select first proxy: %v", err)
+	}
+	excluded := map[string]struct{}{first.URL: {}}
+
+	second, err := manager.SelectExcluding(group, 1, excluded)
+	if err != nil {
+		t.Fatalf("select second proxy: %v", err)
+	}
+	if second.URL == first.URL {
+		t.Fatalf("SelectExcluding repeated tried proxy %s", first.URL)
+	}
+
+	excluded[second.URL] = struct{}{}
+	third, err := manager.SelectExcluding(group, 1, excluded)
+	if err != nil {
+		t.Fatalf("select third proxy: %v", err)
+	}
+	if third.URL == first.URL || third.URL == second.URL {
+		t.Fatalf("SelectExcluding selected tried proxy %s", third.URL)
+	}
+
+	excluded[third.URL] = struct{}{}
+	if _, err := manager.SelectExcluding(group, 1, excluded); err == nil {
+		t.Fatal("expected no untried proxy after excluding every proxy")
+	}
+}
+
 func TestProxyTransportErrorRequiresProxyEvidence(t *testing.T) {
 	proxyURL := "http://127.0.0.1:1001"
 	if IsProxyTransportError(fmt.Errorf("context deadline exceeded while awaiting headers"), proxyURL) {
